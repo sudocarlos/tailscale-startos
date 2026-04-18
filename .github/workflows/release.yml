@@ -27,7 +27,10 @@ jobs:
           cache: 'npm'
 
       - name: Install start-cli
-        run: npm install -g @start9labs/start-cli
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/Start9Labs/start-os/releases/latest | jq -r .tag_name)
+          curl -fsSL "https://github.com/Start9Labs/start-os/releases/download/${LATEST}/start-cli_x86_64-linux" -o /usr/local/bin/start-cli
+          chmod +x /usr/local/bin/start-cli
 
       - name: Initialize developer key
         run: start-cli init-key
