@@ -11,7 +11,7 @@ export const manifest = setupManifest({
   donationUrl: null,
   docsUrls: ['https://tailscale.com/docs/'],
   description: i18n.description,
-  volumes: ['tailscale'],
+  volumes: ['tailscale', 'startos'],
   images: {
     tailscale: {
       source: { dockerTag: 'tailscale/tailscale:stable' },
