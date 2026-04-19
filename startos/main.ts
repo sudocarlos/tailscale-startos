@@ -2,7 +2,7 @@ import { sdk } from './sdk'
 import { statusJson } from './fileModels/status.json'
 import { storeJson } from './fileModels/store.json'
 import { parseTailscaleIp, parseDnsName } from './utils'
-import { startProxy, proxyKey } from './tcpProxy'
+import { applyServicesConfig } from './actions/manageServes'
 
 const UI_PORT = 8080
 const STATE_DIR = '/var/lib/tailscale'
@@ -53,6 +53,23 @@ export const main = sdk.setupMain(async ({ effects }) => {
               message: 'Waiting for tailscaled to be ready...',
             }
           }
+
+          // Only proceed once Tailscale has reached Running state.
+          // BackendState is "NoState" | "NeedsLogin" | "NeedsRoutineAuth" |
+          // "Stopped" | "Starting" | "Running".
+          let statusData: { BackendState?: string; Self?: { DNSName?: string } }
+          try {
+            statusData = JSON.parse(result.stdout.toString().trim())
+          } catch {
+            return { result: 'loading', message: 'Waiting for tailscaled to be ready...' }
+          }
+          if (statusData.BackendState !== 'Running') {
+            return {
+              result: 'loading',
+              message: `Tailscale state: ${statusData.BackendState ?? 'unknown'}`,
+            }
+          }
+
           // Persist IP and DNS name for use by actions
           try {
             const ipResult = await subcontainer.exec([
@@ -70,57 +87,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
             console.error('Failed to persist tailscale status:', e)
           }
 
-          // Restore tailscale serve configs from store on first ready
+          // Restore tailscale serve configs from store on first Running transition
           if (!servesRestored) {
             servesRestored = true
             try {
-              const store = (await storeJson.read().const(effects)) || {}
-              for (const [packageId, ifaces] of Object.entries(store)) {
-                for (const [interfaceId, port] of Object.entries(ifaces)) {
-                  let host: string
-                  let internalPort: number
-
-                  if (packageId === 'startos') {
-                    host = 'startos.startos'
-                    internalPort = 80
-                  } else {
-                    host = `${packageId}.startos`
-                    const iface = await sdk.serviceInterface
-                      .get(effects, { id: interfaceId, packageId })
-                      .once()
-                    if (!iface?.addressInfo) continue
-                    internalPort = iface.addressInfo.internalPort
-                  }
-
-                  // Start local TCP proxy: 127.0.0.1:<port> -> <host>:<internalPort>
-                  const key = proxyKey(packageId, interfaceId)
-                  try {
-                    await startProxy(key, port, host, internalPort)
-                  } catch (e) {
-                    console.error(`Failed to start TCP proxy for ${key} on port ${port}:`, e)
-                    continue
-                  }
-
-                  // Tell tailscale to serve TCP on this port -> localhost
-                  const serveResult = await subcontainer.exec([
-                    'tailscale',
-                    '--socket=' + SOCKET,
-                    'serve',
-                    '--bg',
-                    '--tcp=' + port,
-                    `tcp://localhost:${port}`,
-                  ])
-                  if (serveResult.exitCode !== 0) {
-                    console.error(`Failed to restore serve ${key} on port ${port}: ${serveResult.stderr.toString()}`)
-                  } else {
-                    console.info(`Restored serve ${key} on port ${port}`)
-                  }
-                }
+              const store = (await storeJson.read().once()) || {}
+              if (Object.keys(store).length > 0) {
+                await applyServicesConfig(subcontainer, store, effects)
+                console.info('Restored tailscale serves from store')
               }
             } catch (e) {
               console.error('Failed to restore tailscale serves:', e)
             }
           }
+
           return {
             result: 'success',
             message: 'Tailscale daemon is running',
