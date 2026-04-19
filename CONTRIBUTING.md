@@ -23,11 +23,10 @@ tailscale-startos/
 │   ├── index.ts              # Top-level exports (plumbing — do not edit)
 │   ├── main.ts               # Daemon definitions, health checks, serve restoration
 │   ├── sdk.ts                # Package-specific SDK instance
-│   ├── tcpProxy.ts           # Node.js TCP proxy (bridges localhost -> internal services)
 │   ├── utils.ts              # assignPort, parseTailscaleIp, parseDnsName
 │   ├── actions/
 │   │   ├── index.ts          # Actions.of() registration
-│   │   ├── manageServes.ts   # Manage Serves action
+│   │   ├── manageServes.ts   # Manage Serves action + applyServicesConfig()
 │   │   └── viewServes.ts     # View Serves action
 │   ├── backups/              # Backup/restore logic
 │   ├── dependencies/         # Dependency declarations
@@ -96,12 +95,15 @@ npm run prettier
 
 When a user adds a serve via **Manage Serves**:
 
-1. The action resolves the target service's internal hostname (`<packageId>.startos`) and port from the StartOS service interface API.
-2. A Node.js TCP server is started on `127.0.0.1:<tailnetPort>` that pipes connections to `<packageId>.startos:<internalPort>`.
-3. `tailscale serve --bg --tcp=<tailnetPort> tcp://localhost:<tailnetPort>` is run inside the subcontainer via `SubContainer.withTemp` (which shares `/run` with the main container, giving it access to the tailscaled socket).
-4. The mapping is saved to `startos/store.json`.
+1. The action reads the current store and assigns ports to any new entries (starting at 10000, incrementing above the current max).
+2. `applyServicesConfig()` (exported from `manageServes.ts`) is called inside a `SubContainer.withTemp`:
+   a. Runs `tailscale serve reset` to clear all existing serves.
+   b. For each entry, checks `serviceInterface.addressInfo.scheme`:
+      - `http` (or StartOS UI): runs `tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>` — Tailscale terminates TLS.
+      - otherwise: runs `tailscale serve --bg --tcp <port> tcp://<pkg>.startos:<internalPort>` — raw TCP forwarding.
+3. The new port mapping is saved to `startos/store.json`.
 
-On daemon startup, all mappings in `store.json` are restored (once, after the first successful health check).
+On daemon startup, `applyServicesConfig()` is called once (after `BackendState = Running`) with the stored mappings to restore all serves.
 
 ### Shared Run
 
@@ -114,8 +116,8 @@ reach the tailscaled Unix socket at `/var/run/tailscale/tailscaled.sock`.
 
 On each successful `tailscaled` health check, the node's Tailscale IP and
 MagicDNS name are written to `startos/status.json`. The **View Serves** action
-reads this file rather than exec'ing into a container, avoiding the need to
-shell out at action time.
+reads this file along with `store.json` to build URLs without shelling out into
+a container.
 
 ## Making Changes
 

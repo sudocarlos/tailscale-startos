@@ -134,32 +134,32 @@ traffic is handled internally by tailscaled in userspace networking mode.
 
 ### Manage Serves
 
-Exposes StartOS services on your tailnet via `tailscale serve --tcp`.
+Exposes StartOS services on your tailnet via `tailscale serve`.
 
 - Presents a list of all installed packages and their service interfaces.
 - Each selected service/interface is assigned a unique tailnet port (starting at
   10000, incrementing by 1).
 - Existing port assignments are preserved when the list is updated.
-- Removing a serve tears down both the `tailscale serve` rule and the local TCP proxy.
+- Removing all serves resets the serve configuration entirely.
 
 **How it works internally:**
 
-Because `tailscale serve --tcp` only forwards to `localhost`, a Node.js TCP
-proxy is started for each serve: `127.0.0.1:<tailnetPort>` →
-`<packageId>.startos:<internalPort>`. Tailscale then forwards tailnet traffic to
-that local proxy, which bridges it to the service on the StartOS internal
-network.
+For each serve, the service interface's `addressInfo.scheme` is checked:
 
-Serves and their TCP proxies are automatically restored on daemon startup from
-`store.json`.
+- `http` backend (or StartOS UI): `tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>` — Tailscale terminates TLS and reverse-proxies to the HTTP backend. The client-facing URL uses `https://`.
+- non-HTTP backend: `tailscale serve --bg --tcp <port> tcp://<pkg>.startos:<internalPort>` — raw TCP forwarding.
+
+Before re-applying, `tailscale serve reset` is run to atomically replace the
+entire configuration. Serves are automatically restored on daemon startup from
+`store.json` after the first successful health check (`BackendState = Running`).
 
 ### View Serves
 
-Displays all currently configured serves with their full addresses.
+Displays all currently configured serves with their full tailnet addresses.
 
 - Shows both the Tailscale IP and MagicDNS hostname for each serve.
-- Detects the service interface scheme (`http`, `https`, etc.) from the StartOS
-  service interface metadata and uses it in the displayed URL.
+- Reads port assignments from `store.json` and scheme from the service interface
+  metadata — no subprocess required.
 - Disabled when no serves are configured.
 - Only available while the service is running.
 
@@ -209,9 +209,9 @@ None. Tailscale is a standalone service.
 2. **No CLI access** — interact only through the web interface or StartOS
    actions; the `tailscale` CLI is not exposed to the StartOS user directly.
 3. **No Taildrop** — file transfer via Taildrop is not tested and not supported.
-4. **TCP-only serves** — `tailscale serve --tcp` is used for all serves; HTTP/HTTPS
-   Tailscale serve is not currently used, though the displayed URL scheme is
-   inferred from the service interface metadata.
+4. **HTTPS reverse proxy for HTTP services** — `tailscale serve --bg --https`
+   is used for HTTP backends; Tailscale terminates TLS so clients access
+   services over `https://`. Non-HTTP services use raw TCP forwarding.
 5. **Web UI requires Tailscale v1.56.0+** — the `tailscale/tailscale:stable`
    image satisfies this requirement.
 
@@ -251,10 +251,10 @@ dependencies: none
 daemons:
   - id: tailscaled
     command: tailscaled --state=... --socket=... --tun=userspace-networking
-    health: tailscale status --json exits 0
+    health: tailscale status --json, BackendState=Running
     on_ready:
       - write ip + dnsName to startos/status.json
-      - restore tailscale serve rules + TCP proxies from startos/store.json (once)
+      - restore tailscale serve rules from startos/store.json (once, via CLI)
   - id: tailscale-web
     command: tailscale web --listen=0.0.0.0:8080
     health: port 8080 listening
@@ -264,10 +264,13 @@ actions:
     description: Add/remove tailscale serve rules for installed StartOS services
     input: list of { packageId, interfaceId } pairs
     state: startos/store.json
-    mechanism: Node.js TCP proxy (127.0.0.1:<port> -> <pkg>.startos:<internalPort>)
-               + tailscale serve --bg --tcp=<port> tcp://localhost:<port>
+    mechanism: |
+      tailscale serve reset
+      for each serve:
+        http backend:     tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>
+        non-http backend: tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
   - id: view-serves
     description: Display tailnet URLs for all configured serves
     state: startos/store.json + startos/status.json
-    url_scheme: inferred from serviceInterface.addressInfo.scheme
+    url_scheme: https for http backends (Tailscale terminates TLS), tcp otherwise
 ```
