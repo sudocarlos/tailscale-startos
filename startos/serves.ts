@@ -43,6 +43,14 @@ export async function applyServicesConfig(
 
   let count = 0
   for (const [packageId, ifaces] of Object.entries(store)) {
+    // Skip StartOS self-target — not a supported serve target.
+    if (packageId === 'startos') {
+      console.info(
+        `[serves] skipping startos self-target (not supported)`,
+      )
+      continue
+    }
+
     for (const [interfaceId, entry] of Object.entries(ifaces)) {
       // Skip legacy entries — they have no cached metadata yet
       if (entry.hostId === '') {
@@ -58,10 +66,7 @@ export async function applyServicesConfig(
       let target: string
       let isHttpProxy: boolean
 
-      if (packageId === 'startos') {
-        target = 'https+insecure://startos.startos:443'
-        isHttpProxy = true
-      } else if (scheme === 'http') {
+      if (scheme === 'http') {
         target = `https://${host}:${internalPort}`
         isHttpProxy = true
       } else if (scheme === 'https') {

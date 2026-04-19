@@ -43,6 +43,13 @@ export const addServe = sdk.Action.withInput(
       input.urlPluginMetadata
     const packageId = rawPkgId ?? 'startos'
 
+    // StartOS self-target is not supported: the node is already on the
+    // tailnet by IP, and the platform has no :443 binding registered.
+    if (packageId === 'startos') {
+      console.warn('[addServe] ignoring startos self-target — not supported')
+      return
+    }
+
     // Use .once() to avoid "write after const" error
     const store: z.infer<typeof shape> =
       (await storeJson.read().once()) || {}
@@ -54,20 +61,15 @@ export const addServe = sdk.Action.withInput(
       return
     }
 
-    // Resolve scheme from the service interface (or hardcode for startos)
+    // Resolve scheme from the service interface
     let scheme: StoreEntry['scheme']
     let resolvedInternalPort: number
 
-    if (packageId === 'startos') {
-      scheme = 'https'
-      resolvedInternalPort = 443
-    } else {
-      const iface = await sdk.serviceInterface
-        .get(effects, { id: interfaceId, packageId })
-        .once()
-      scheme = (iface?.addressInfo?.scheme as StoreEntry['scheme']) ?? null
-      resolvedInternalPort = iface?.addressInfo?.internalPort ?? internalPort
-    }
+    const iface = await sdk.serviceInterface
+      .get(effects, { id: interfaceId, packageId })
+      .once()
+    scheme = (iface?.addressInfo?.scheme as StoreEntry['scheme']) ?? null
+    resolvedInternalPort = iface?.addressInfo?.internalPort ?? internalPort
 
     // Reuse existing port on legacy-upgrade; assign new port for fresh entry
     const port = existing !== undefined ? existing.port : assignPort(store)

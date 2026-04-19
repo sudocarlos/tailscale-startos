@@ -15,20 +15,68 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
     const status = await statusJson.read().const(effects)
     if (!status) return
 
+    // Collect candidate entries, skipping legacy and startos self-target.
+    const candidates: Array<{
+      packageId: string
+      interfaceId: string
+      port: number
+      hostId: string
+      scheme: string | null
+    }> = []
+
     for (const [packageId, ifaces] of Object.entries(store)) {
+      // Skip StartOS self-target — not a supported serve target.
+      if (packageId === 'startos') continue
+
       for (const [interfaceId, entry] of Object.entries(ifaces)) {
         // Skip legacy entries — they have no hostId/scheme cached yet.
         // The URL plugin tile will continue to show "Add Serve"; the user
         // re-clicks once to supply the full metadata.
         if (entry.hostId === '') continue
 
-        const { port, hostId, scheme, internalPort } = entry
+        candidates.push({
+          packageId,
+          interfaceId,
+          port: entry.port,
+          hostId: entry.hostId,
+          scheme: entry.scheme,
+        })
+      }
+    }
+
+    // Resolve live internalPort for each entry in parallel (Fix B).
+    // Using .once() per interface avoids stacking live subscriptions (Fix C).
+    await Promise.all(
+      candidates.map(async ({ packageId, interfaceId, port, hostId, scheme }) => {
+        let internalPort: number
+
+        try {
+          const iface = await sdk.serviceInterface
+            .get(effects, { id: interfaceId, packageId })
+            .once()
+
+          if (!iface || !iface.addressInfo) {
+            console.warn(
+              `[plugin/url] interface ${packageId}/${interfaceId} not found (package uninstalled?), skipping`,
+            )
+            return
+          }
+
+          internalPort = iface.addressInfo.internalPort
+        } catch (e) {
+          console.warn(
+            `[plugin/url] could not resolve internalPort for ${packageId}/${interfaceId}, skipping:`,
+            e,
+          )
+          return
+        }
+
         const ssl = scheme === 'http' || scheme === 'https'
 
         await sdk.plugin.url
           .exportUrl(effects, {
             hostnameInfo: {
-              packageId: packageId === 'startos' ? null : packageId,
+              packageId,
               hostId,
               internalPort,
               ssl,
@@ -46,7 +94,7 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
               e,
             )
           })
-      }
-    }
+      }),
+    )
   },
 )
