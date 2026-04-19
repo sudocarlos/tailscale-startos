@@ -146,25 +146,28 @@ export const manageServes = sdk.Action.withInput(
       if (!toSave[selection]) toSave[selection] = {}
 
       const existing = store[selection]?.[interfaceId]
-      if (existing !== undefined) {
-        toSave[selection][interfaceId] = existing
-      } else {
-        // Determine if this is an HTTP service
-        let httpProxy: boolean
-        if (selection === 'startos') {
-          httpProxy = true
-        } else {
-          const iface = await sdk.serviceInterface
-            .get(effects, { id: interfaceId, packageId: selection })
-            .once()
-          httpProxy = iface?.addressInfo?.scheme === 'http'
-        }
 
-        const port = assignPort(workingStore)
-        toSave[selection][interfaceId] = { port, httpProxy }
-        if (!workingStore[selection]) workingStore[selection] = {}
-        workingStore[selection][interfaceId] = { port, httpProxy }
+      // Determine if this is an HTTP service
+      let httpProxy: boolean
+      if (selection === 'startos') {
+        httpProxy = true
+      } else {
+        const iface = await sdk.serviceInterface
+          .get(effects, { id: interfaceId, packageId: selection })
+          .once()
+        httpProxy = iface?.addressInfo?.scheme === 'http'
       }
+
+      // Preserve the existing port if present; re-detect httpProxy every time
+      // to ensure stale store data (e.g. from before schema change) is corrected.
+      const port =
+        existing !== undefined && typeof existing === 'object'
+          ? existing.port
+          : assignPort(workingStore)
+
+      toSave[selection][interfaceId] = { port, httpProxy }
+      if (!workingStore[selection]) workingStore[selection] = {}
+      workingStore[selection][interfaceId] = { port, httpProxy }
     }
 
     // Determine removals and additions
