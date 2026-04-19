@@ -1,8 +1,6 @@
 import { statusJson } from '../fileModels/status.json'
+import { storeJson } from '../fileModels/store.json'
 import { sdk } from '../sdk'
-
-const SOCKET = '/var/run/tailscale/tailscaled.sock'
-const STATE_DIR = '/var/lib/tailscale'
 
 export const viewServes = sdk.Action.withoutInput(
   // id
@@ -10,30 +8,10 @@ export const viewServes = sdk.Action.withoutInput(
 
   // metadata
   async ({ effects }) => {
-    // Check if any serves are configured by reading the live config
-    const mounts = sdk.Mounts.of().mountVolume({
-      volumeId: 'tailscale',
-      subpath: null,
-      mountpoint: STATE_DIR,
-      readonly: false,
-    })
     let hasServes = false
     try {
-      await sdk.SubContainer.withTemp(
-        effects,
-        { imageId: 'tailscale', sharedRun: true },
-        mounts,
-        'tailscale-view-check',
-        async (sub) => {
-          const result = await sub.exec([
-            'tailscale', '--socket=' + SOCKET, 'serve', 'get-config', '--all',
-          ])
-          if (result.exitCode === 0) {
-            const config = JSON.parse(result.stdout.toString().trim())
-            hasServes = Object.keys(config?.services ?? {}).length > 0
-          }
-        },
-      )
+      const store = (await storeJson.read().const(effects)) || {}
+      hasServes = Object.keys(store).length > 0
     } catch {
       // ignore — fall through to disabled
     }
@@ -58,56 +36,25 @@ export const viewServes = sdk.Action.withoutInput(
     }
     const { ip, dnsName } = status
 
-    const mounts = sdk.Mounts.of().mountVolume({
-      volumeId: 'tailscale',
-      subpath: null,
-      mountpoint: STATE_DIR,
-      readonly: false,
-    })
+    const store = (await storeJson.read().once()) || {}
 
     type ServiceEntry = { port: number; scheme: string; packageId: string; interfaceId: string }
-    let serviceEntries: ServiceEntry[] = []
+    const serviceEntries: ServiceEntry[] = []
 
-    await sdk.SubContainer.withTemp(
-      effects,
-      { imageId: 'tailscale', sharedRun: true },
-      mounts,
-      'tailscale-view-serves',
-      async (sub) => {
-        const result = await sub.exec([
-          'tailscale', '--socket=' + SOCKET, 'serve', 'get-config', '--all',
-        ])
-        if (result.exitCode !== 0) {
-          throw new Error(`tailscale serve get-config --all failed: ${result.stderr.toString()}`)
+    for (const [packageId, ifaces] of Object.entries(store)) {
+      for (const [interfaceId, port] of Object.entries(ifaces)) {
+        let scheme: string
+        if (packageId === 'startos') {
+          scheme = 'https'
+        } else {
+          const iface = await sdk.serviceInterface
+            .get(effects, { id: interfaceId, packageId })
+            .once()
+          scheme = iface?.addressInfo?.scheme === 'http' ? 'https' : 'tcp'
         }
-
-        const config = JSON.parse(result.stdout.toString().trim()) as {
-          version: string
-          services: Record<string, { endpoints: Record<string, string> }>
-        }
-
-        for (const [svcName, svcDef] of Object.entries(config.services ?? {})) {
-          // svcName format: "svc:<packageId>-<interfaceId>"
-          const match = svcName.match(/^svc:(.+)-([^-]+)$/)
-          if (!match) continue
-          const packageId = match[1]
-          const interfaceId = match[2]
-
-          for (const [endpointKey, localTarget] of Object.entries(svcDef.endpoints ?? {})) {
-            // endpointKey format: "tcp:<port>"
-            const portMatch = endpointKey.match(/^tcp:(\d+)$/)
-            if (!portMatch) continue
-            const port = parseInt(portMatch[1], 10)
-
-            // Local target starting with "http://" means Tailscale does TLS
-            // termination — the client-facing URL is https://
-            const scheme = localTarget.startsWith('http://') ? 'https' : 'tcp'
-
-            serviceEntries.push({ port, scheme, packageId, interfaceId })
-          }
-        }
-      },
-    )
+        serviceEntries.push({ port, scheme, packageId, interfaceId })
+      }
+    }
 
     const outputEntries = await Promise.all(
       serviceEntries.map(async ({ port, scheme, packageId, interfaceId }) => {
@@ -118,7 +65,7 @@ export const viewServes = sdk.Action.withoutInput(
           const packageTitle =
             (await sdk
               .getServiceManifest(effects, packageId, (m) => m?.title)
-              .const()) ?? packageId
+              .once()) ?? packageId
           const iface = await sdk.serviceInterface
             .get(effects, { id: interfaceId, packageId })
             .once()

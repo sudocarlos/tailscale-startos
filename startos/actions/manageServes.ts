@@ -8,8 +8,6 @@ const { InputSpec, Value, List, Variants } = sdk
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
-// Path inside the subcontainer where we write the services config file
-const SERVE_CONFIG_PATH = '/tmp/tailscale-serve-config.json'
 
 export const inputSpec = InputSpec.of({
   serves: Value.list(
@@ -111,7 +109,7 @@ export const manageServes = sdk.Action.withInput(
     console.log('[manageServes] prefill: start')
     let store: z.infer<typeof shape> = {}
     try {
-      store = (await storeJson.read().const(effects)) || {}
+      store = (await storeJson.read().once()) || {}
       console.log('[manageServes] prefill: store =', JSON.stringify(store))
     } catch (e) {
       console.error('[manageServes] prefill: storeJson.read().const error:', e instanceof Error ? e.stack : String(e))
@@ -177,27 +175,26 @@ export const manageServes = sdk.Action.withInput(
 )
 
 /**
- * Builds a Tailscale Services configuration object from the store and applies
- * it atomically via `tailscale serve set-config --all`.
+ * Applies Tailscale serve configuration using CLI commands.
  *
- * For each entry, the local target protocol is determined live from the
- * service interface's addressInfo.scheme:
- *   - scheme === 'http' (or startos): `http://<host>:<port>` — Tailscale
- *     terminates TLS and reverse-proxies to the HTTP backend.
- *   - otherwise: `tcp://<host>:<port>` — raw TCP forwarding.
+ * Resets all existing serves first, then adds each entry via
+ * `tailscale serve --bg --https <port> <target>` for HTTP backends
+ * or `tailscale serve --bg --tcp <port> <target>` for TCP.
  */
 export async function applyServicesConfig(
   sub: { exec: (cmd: string[]) => Promise<{ exitCode: number | null; stderr: Buffer | string }> },
   store: z.infer<typeof shape>,
   effects: Parameters<typeof sdk.serviceInterface.get>[0],
 ): Promise<void> {
-  type ServicesConfig = {
-    version: string
-    services: Record<string, { endpoints: Record<string, string> }>
+  // Reset all existing serves first
+  const resetResult = await sub.exec([
+    'tailscale', '--socket=' + SOCKET, 'serve', 'reset',
+  ])
+  if (resetResult.exitCode !== 0) {
+    throw new Error(`tailscale serve reset failed: ${resetResult.stderr.toString()}`)
   }
 
-  const config: ServicesConfig = { version: '0.0.1', services: {} }
-
+  let count = 0
   for (const [packageId, ifaces] of Object.entries(store)) {
     for (const [interfaceId, port] of Object.entries(ifaces)) {
       let host: string
@@ -221,39 +218,23 @@ export async function applyServicesConfig(
         httpProxy = iface.addressInfo.scheme === 'http'
       }
 
-      const localTarget = httpProxy
+      const target = httpProxy
         ? `http://${host}:${internalPort}`
         : `tcp://${host}:${internalPort}`
 
-      const svcName = `svc:${packageId}-${interfaceId}`
-      config.services[svcName] = {
-        endpoints: { [`tcp:${port}`]: localTarget },
+      const cmd = httpProxy
+        ? ['tailscale', '--socket=' + SOCKET, 'serve', '--bg', '--https', String(port), target]
+        : ['tailscale', '--socket=' + SOCKET, 'serve', '--bg', '--tcp', String(port), target]
+
+      const result = await sub.exec(cmd)
+      if (result.exitCode !== 0) {
+        throw new Error(`tailscale serve failed for ${packageId}/${interfaceId}: ${result.stderr.toString()}`)
       }
+      count++
     }
   }
 
-  // Write config JSON to a temp file inside the subcontainer and apply it
-  const configJson = JSON.stringify(config)
-  const writeResult = await sub.exec([
-    'sh', '-c', `printf '%s' '${configJson.replace(/'/g, "'\\''")}' > ${SERVE_CONFIG_PATH}`,
-  ])
-  if (writeResult.exitCode !== 0) {
-    throw new Error(`Failed to write serve config: ${writeResult.stderr.toString()}`)
-  }
-
-  const applyResult = await sub.exec([
-    'tailscale',
-    '--socket=' + SOCKET,
-    'serve',
-    'set-config',
-    '--all',
-    SERVE_CONFIG_PATH,
-  ])
-  if (applyResult.exitCode !== 0) {
-    throw new Error(`tailscale serve set-config --all failed: ${applyResult.stderr.toString()}`)
-  }
-
-  console.info(`[manageServes] applied services config with ${Object.keys(config.services).length} service(s)`)
+  console.info(`[manageServes] applied ${count} serve(s)`)
 }
 
 function getSpec(packageId: string, packageTitle: string, iFaces: string[][]) {

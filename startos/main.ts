@@ -91,7 +91,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
           if (!servesRestored) {
             servesRestored = true
             try {
-              const store = (await storeJson.read().const(effects)) || {}
+              const store = (await storeJson.read().once()) || {}
               if (Object.keys(store).length > 0) {
                 await applyServicesConfig(subcontainer, store, effects)
                 console.info('Restored tailscale serves from store')
