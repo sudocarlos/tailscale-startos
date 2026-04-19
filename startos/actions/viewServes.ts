@@ -73,12 +73,26 @@ export const viewServes = sdk.Action.withoutInput(
           label = `${packageTitle} - ${ifaceName}`
         }
 
+        if (scheme === 'https') {
+          return [
+            {
+              type: 'single' as const,
+              name: label,
+              description: null,
+              value: `https://${dnsName}:${port}`,
+              masked: false,
+              copyable: true,
+              qr: false,
+            },
+          ]
+        }
+
         return [
           {
             type: 'single' as const,
             name: `${label} (IP)`,
             description: null,
-            value: `${scheme}://${ip}:${port}`,
+            value: `tcp://${ip}:${port}`,
             masked: false,
             copyable: true,
             qr: false,
@@ -87,7 +101,7 @@ export const viewServes = sdk.Action.withoutInput(
             type: 'single' as const,
             name: `${label} (MagicDNS)`,
             description: null,
-            value: `${scheme}://${dnsName}:${port}`,
+            value: `tcp://${dnsName}:${port}`,
             masked: false,
             copyable: true,
             qr: false,
