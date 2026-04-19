@@ -31,13 +31,14 @@ export const viewServes = sdk.Action.withoutInput(
 
     const entries = await Promise.all(
       Object.entries(store).flatMap(([packageId, ifaces]) =>
-        Object.entries(ifaces).map(async ([interfaceId, port]) => {
+        Object.entries(ifaces).map(async ([interfaceId, entry]) => {
+          const { port, httpProxy } = entry
           let label: string
-          let scheme = 'tcp'
+          // httpProxy entries are served as HTTPS on the tailnet (TLS terminated by Tailscale)
+          const scheme = httpProxy ? 'https' : 'tcp'
 
           if (packageId === 'startos') {
             label = 'StartOS UI'
-            scheme = 'http'
           } else {
             const packageTitle =
               (await sdk
@@ -48,10 +49,6 @@ export const viewServes = sdk.Action.withoutInput(
               .once()
             const ifaceName = iface?.name || 'unknown'
             label = `${packageTitle} - ${ifaceName}`
-
-            if (iface?.addressInfo?.scheme) {
-              scheme = iface.addressInfo.scheme
-            }
           }
 
           return [

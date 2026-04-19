@@ -107,7 +107,7 @@ export const manageServes = sdk.Action.withInput(
   // pre-fill form from store
   async ({ effects }) => {
     console.log('[manageServes] prefill: start')
-    let store: Record<string, Record<string, number>> = {}
+    let store: z.infer<typeof shape> = {}
     try {
       store = (await storeJson.read().const(effects)) || {}
       console.log('[manageServes] prefill: store =', JSON.stringify(store))
@@ -145,34 +145,44 @@ export const manageServes = sdk.Action.withInput(
 
       if (!toSave[selection]) toSave[selection] = {}
 
-      const existingPort = store[selection]?.[interfaceId]
-      if (existingPort !== undefined) {
-        toSave[selection][interfaceId] = existingPort
+      const existing = store[selection]?.[interfaceId]
+      if (existing !== undefined) {
+        toSave[selection][interfaceId] = existing
       } else {
+        // Determine if this is an HTTP service
+        let httpProxy: boolean
+        if (selection === 'startos') {
+          httpProxy = true
+        } else {
+          const iface = await sdk.serviceInterface
+            .get(effects, { id: interfaceId, packageId: selection })
+            .once()
+          httpProxy = iface?.addressInfo?.scheme === 'http'
+        }
+
         const port = assignPort(workingStore)
-        toSave[selection][interfaceId] = port
-        // update working store so next assignPort call sees this port
+        toSave[selection][interfaceId] = { port, httpProxy }
         if (!workingStore[selection]) workingStore[selection] = {}
-        workingStore[selection][interfaceId] = port
+        workingStore[selection][interfaceId] = { port, httpProxy }
       }
     }
 
     // Determine removals and additions
-    const removals: Array<{ packageId: string; interfaceId: string; port: number }> = []
-    const additions: Array<{ packageId: string; interfaceId: string; port: number; host: string; internalPort: number }> = []
+    const removals: Array<{ packageId: string; interfaceId: string; port: number; httpProxy: boolean }> = []
+    const additions: Array<{ packageId: string; interfaceId: string; port: number; httpProxy: boolean; host: string; internalPort: number }> = []
 
     // Removals: was in store, not in toSave
     for (const [packageId, ifaces] of Object.entries(store)) {
-      for (const [interfaceId, port] of Object.entries(ifaces)) {
+      for (const [interfaceId, entry] of Object.entries(ifaces)) {
         if (toSave[packageId]?.[interfaceId] === undefined) {
-          removals.push({ packageId, interfaceId, port })
+          removals.push({ packageId, interfaceId, port: entry.port, httpProxy: entry.httpProxy })
         }
       }
     }
 
     // Additions: in toSave but not in store
     for (const [packageId, ifaces] of Object.entries(toSave)) {
-      for (const [interfaceId, port] of Object.entries(ifaces)) {
+      for (const [interfaceId, entry] of Object.entries(ifaces)) {
         if (store[packageId]?.[interfaceId] === undefined) {
           let host: string
           let internalPort: number
@@ -189,7 +199,7 @@ export const manageServes = sdk.Action.withInput(
             internalPort = iface.addressInfo.internalPort
           }
 
-          additions.push({ packageId, interfaceId, port, host, internalPort })
+          additions.push({ packageId, interfaceId, port: entry.port, httpProxy: entry.httpProxy, host, internalPort })
         }
       }
     }
@@ -208,36 +218,64 @@ export const manageServes = sdk.Action.withInput(
       'tailscale-serve-mgr',
       async (sub) => {
         // Remove old serves
-        for (const { packageId, interfaceId, port } of removals) {
-          const result = await sub.exec([
-            'tailscale',
-            '--socket=' + SOCKET,
-            'serve',
-            '--tcp=' + port,
-            'off',
-          ])
-          if (result.exitCode !== 0) {
-            console.error(`tailscale serve --tcp=${port} off failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
+        for (const { packageId, interfaceId, port, httpProxy } of removals) {
+          if (httpProxy) {
+            const result = await sub.exec([
+              'tailscale',
+              '--socket=' + SOCKET,
+              'serve',
+              '--https=' + port,
+              'off',
+            ])
+            if (result.exitCode !== 0) {
+              console.error(`tailscale serve --https=${port} off failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
+            }
+          } else {
+            const result = await sub.exec([
+              'tailscale',
+              '--socket=' + SOCKET,
+              'serve',
+              '--tcp=' + port,
+              'off',
+            ])
+            if (result.exitCode !== 0) {
+              console.error(`tailscale serve --tcp=${port} off failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
+            }
+            await stopProxy(proxyKey(packageId, interfaceId))
           }
-          await stopProxy(proxyKey(packageId, interfaceId))
         }
 
         // Add new serves
-        for (const { packageId, interfaceId, port, host, internalPort } of additions) {
-          // Start TCP proxy: 127.0.0.1:<port> -> <host>:<internalPort>
-          const key = proxyKey(packageId, interfaceId)
-          await startProxy(key, port, host, internalPort)
+        for (const { packageId, interfaceId, port, httpProxy, host, internalPort } of additions) {
+          if (httpProxy) {
+            // Native HTTPS reverse proxy — no TCP proxy needed
+            const result = await sub.exec([
+              'tailscale',
+              '--socket=' + SOCKET,
+              'serve',
+              '--bg',
+              '--https=' + port,
+              `http://${host}:${internalPort}`,
+            ])
+            if (result.exitCode !== 0) {
+              throw new Error(`tailscale serve --https=${port} http://${host}:${internalPort} failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
+            }
+          } else {
+            // TCP proxy: 127.0.0.1:<port> -> <host>:<internalPort>
+            const key = proxyKey(packageId, interfaceId)
+            await startProxy(key, port, host, internalPort)
 
-          const result = await sub.exec([
-            'tailscale',
-            '--socket=' + SOCKET,
-            'serve',
-            '--bg',
-            '--tcp=' + port,
-            `tcp://localhost:${port}`,
-          ])
-          if (result.exitCode !== 0) {
-            throw new Error(`tailscale serve --tcp=${port} tcp://localhost:${port} failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
+            const result = await sub.exec([
+              'tailscale',
+              '--socket=' + SOCKET,
+              'serve',
+              '--bg',
+              '--tcp=' + port,
+              `tcp://localhost:${port}`,
+            ])
+            if (result.exitCode !== 0) {
+              throw new Error(`tailscale serve --tcp=${port} tcp://localhost:${port} failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
+            }
           }
         }
       },

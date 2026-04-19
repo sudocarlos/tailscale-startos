@@ -76,7 +76,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
             try {
               const store = (await storeJson.read().const(effects)) || {}
               for (const [packageId, ifaces] of Object.entries(store)) {
-                for (const [interfaceId, port] of Object.entries(ifaces)) {
+                for (const [interfaceId, entry] of Object.entries(ifaces)) {
+                  const { port, httpProxy } = entry
                   let host: string
                   let internalPort: number
 
@@ -92,28 +93,45 @@ export const main = sdk.setupMain(async ({ effects }) => {
                     internalPort = iface.addressInfo.internalPort
                   }
 
-                  // Start local TCP proxy: 127.0.0.1:<port> -> <host>:<internalPort>
                   const key = proxyKey(packageId, interfaceId)
-                  try {
-                    await startProxy(key, port, host, internalPort)
-                  } catch (e) {
-                    console.error(`Failed to start TCP proxy for ${key} on port ${port}:`, e)
-                    continue
-                  }
 
-                  // Tell tailscale to serve TCP on this port -> localhost
-                  const serveResult = await subcontainer.exec([
-                    'tailscale',
-                    '--socket=' + SOCKET,
-                    'serve',
-                    '--bg',
-                    '--tcp=' + port,
-                    `tcp://localhost:${port}`,
-                  ])
-                  if (serveResult.exitCode !== 0) {
-                    console.error(`Failed to restore serve ${key} on port ${port}: ${serveResult.stderr.toString()}`)
+                  if (httpProxy) {
+                    // Native HTTPS reverse proxy — no TCP proxy needed
+                    const serveResult = await subcontainer.exec([
+                      'tailscale',
+                      '--socket=' + SOCKET,
+                      'serve',
+                      '--bg',
+                      '--https=' + port,
+                      `http://${host}:${internalPort}`,
+                    ])
+                    if (serveResult.exitCode !== 0) {
+                      console.error(`Failed to restore https serve ${key} on port ${port}: ${serveResult.stderr.toString()}`)
+                    } else {
+                      console.info(`Restored https serve ${key} on port ${port}`)
+                    }
                   } else {
-                    console.info(`Restored serve ${key} on port ${port}`)
+                    // Start local TCP proxy: 127.0.0.1:<port> -> <host>:<internalPort>
+                    try {
+                      await startProxy(key, port, host, internalPort)
+                    } catch (e) {
+                      console.error(`Failed to start TCP proxy for ${key} on port ${port}:`, e)
+                      continue
+                    }
+
+                    const serveResult = await subcontainer.exec([
+                      'tailscale',
+                      '--socket=' + SOCKET,
+                      'serve',
+                      '--bg',
+                      '--tcp=' + port,
+                      `tcp://localhost:${port}`,
+                    ])
+                    if (serveResult.exitCode !== 0) {
+                      console.error(`Failed to restore tcp serve ${key} on port ${port}: ${serveResult.stderr.toString()}`)
+                    } else {
+                      console.info(`Restored tcp serve ${key} on port ${port}`)
+                    }
                   }
                 }
               }
