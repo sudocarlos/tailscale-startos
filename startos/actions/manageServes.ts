@@ -2,12 +2,14 @@ import { z } from '@start9labs/start-sdk'
 import { shape, storeJson } from '../fileModels/store.json'
 import { sdk } from '../sdk'
 import { assignPort } from '../utils'
-import { startProxy, stopProxy, proxyKey } from '../tcpProxy'
 
 const { InputSpec, Value, List, Variants } = sdk
 
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
+
+// Path inside the subcontainer where we write the services config file
+const SERVE_CONFIG_PATH = '/tmp/tailscale-serve-config.json'
 
 export const inputSpec = InputSpec.of({
   serves: Value.list(
@@ -145,66 +147,12 @@ export const manageServes = sdk.Action.withInput(
 
       if (!toSave[selection]) toSave[selection] = {}
 
-      const existing = store[selection]?.[interfaceId]
+      const existingPort = store[selection]?.[interfaceId]
+      const port = existingPort !== undefined ? existingPort : assignPort(workingStore)
 
-      // Determine if this is an HTTP service
-      let httpProxy: boolean
-      if (selection === 'startos') {
-        httpProxy = true
-      } else {
-        const iface = await sdk.serviceInterface
-          .get(effects, { id: interfaceId, packageId: selection })
-          .once()
-        httpProxy = iface?.addressInfo?.scheme === 'http'
-      }
-
-      // Preserve the existing port if present; re-detect httpProxy every time
-      // to ensure stale store data (e.g. from before schema change) is corrected.
-      const port =
-        existing !== undefined && typeof existing === 'object'
-          ? existing.port
-          : assignPort(workingStore)
-
-      toSave[selection][interfaceId] = { port, httpProxy }
+      toSave[selection][interfaceId] = port
       if (!workingStore[selection]) workingStore[selection] = {}
-      workingStore[selection][interfaceId] = { port, httpProxy }
-    }
-
-    // Determine removals and additions
-    const removals: Array<{ packageId: string; interfaceId: string; port: number; httpProxy: boolean }> = []
-    const additions: Array<{ packageId: string; interfaceId: string; port: number; httpProxy: boolean; host: string; internalPort: number }> = []
-
-    // Removals: was in store, not in toSave
-    for (const [packageId, ifaces] of Object.entries(store)) {
-      for (const [interfaceId, entry] of Object.entries(ifaces)) {
-        if (toSave[packageId]?.[interfaceId] === undefined) {
-          removals.push({ packageId, interfaceId, port: entry.port, httpProxy: entry.httpProxy })
-        }
-      }
-    }
-
-    // Additions: in toSave but not in store
-    for (const [packageId, ifaces] of Object.entries(toSave)) {
-      for (const [interfaceId, entry] of Object.entries(ifaces)) {
-        if (store[packageId]?.[interfaceId] === undefined) {
-          let host: string
-          let internalPort: number
-
-          if (packageId === 'startos') {
-            host = 'startos.startos'
-            internalPort = 80
-          } else {
-            host = `${packageId}.startos`
-            const iface = await sdk.serviceInterface
-              .get(effects, { id: interfaceId, packageId })
-              .once()
-            if (!iface?.addressInfo) continue
-            internalPort = iface.addressInfo.internalPort
-          }
-
-          additions.push({ packageId, interfaceId, port: entry.port, httpProxy: entry.httpProxy, host, internalPort })
-        }
-      }
+      workingStore[selection][interfaceId] = port
     }
 
     const mounts = sdk.Mounts.of().mountVolume({
@@ -220,73 +168,93 @@ export const manageServes = sdk.Action.withInput(
       mounts,
       'tailscale-serve-mgr',
       async (sub) => {
-        // Remove old serves
-        for (const { packageId, interfaceId, port, httpProxy } of removals) {
-          if (httpProxy) {
-            const result = await sub.exec([
-              'tailscale',
-              '--socket=' + SOCKET,
-              'serve',
-              '--https=' + port,
-              'off',
-            ])
-            if (result.exitCode !== 0) {
-              console.error(`tailscale serve --https=${port} off failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
-            }
-          } else {
-            const result = await sub.exec([
-              'tailscale',
-              '--socket=' + SOCKET,
-              'serve',
-              '--tcp=' + port,
-              'off',
-            ])
-            if (result.exitCode !== 0) {
-              console.error(`tailscale serve --tcp=${port} off failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
-            }
-            await stopProxy(proxyKey(packageId, interfaceId))
-          }
-        }
-
-        // Add new serves
-        for (const { packageId, interfaceId, port, httpProxy, host, internalPort } of additions) {
-          if (httpProxy) {
-            // Native HTTPS reverse proxy — no TCP proxy needed
-            const result = await sub.exec([
-              'tailscale',
-              '--socket=' + SOCKET,
-              'serve',
-              '--bg',
-              '--https=' + port,
-              `http://${host}:${internalPort}`,
-            ])
-            if (result.exitCode !== 0) {
-              throw new Error(`tailscale serve --https=${port} http://${host}:${internalPort} failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
-            }
-          } else {
-            // TCP proxy: 127.0.0.1:<port> -> <host>:<internalPort>
-            const key = proxyKey(packageId, interfaceId)
-            await startProxy(key, port, host, internalPort)
-
-            const result = await sub.exec([
-              'tailscale',
-              '--socket=' + SOCKET,
-              'serve',
-              '--bg',
-              '--tcp=' + port,
-              `tcp://localhost:${port}`,
-            ])
-            if (result.exitCode !== 0) {
-              throw new Error(`tailscale serve --tcp=${port} tcp://localhost:${port} failed (exit ${result.exitCode}): ${result.stderr.toString()}`)
-            }
-          }
-        }
+        await applyServicesConfig(sub, toSave, effects)
       },
     )
 
     await storeJson.write(effects, toSave)
   },
 )
+
+/**
+ * Builds a Tailscale Services configuration object from the store and applies
+ * it atomically via `tailscale serve set-config --all`.
+ *
+ * For each entry, the local target protocol is determined live from the
+ * service interface's addressInfo.scheme:
+ *   - scheme === 'http' (or startos): `http://<host>:<port>` — Tailscale
+ *     terminates TLS and reverse-proxies to the HTTP backend.
+ *   - otherwise: `tcp://<host>:<port>` — raw TCP forwarding.
+ */
+export async function applyServicesConfig(
+  sub: { exec: (cmd: string[]) => Promise<{ exitCode: number | null; stderr: Buffer | string }> },
+  store: z.infer<typeof shape>,
+  effects: Parameters<typeof sdk.serviceInterface.get>[0],
+): Promise<void> {
+  type ServicesConfig = {
+    version: string
+    services: Record<string, { endpoints: Record<string, string> }>
+  }
+
+  const config: ServicesConfig = { version: '0.0.1', services: {} }
+
+  for (const [packageId, ifaces] of Object.entries(store)) {
+    for (const [interfaceId, port] of Object.entries(ifaces)) {
+      let host: string
+      let internalPort: number
+      let httpProxy: boolean
+
+      if (packageId === 'startos') {
+        host = 'startos.startos'
+        internalPort = 80
+        httpProxy = true
+      } else {
+        host = `${packageId}.startos`
+        const iface = await sdk.serviceInterface
+          .get(effects, { id: interfaceId, packageId })
+          .once()
+        if (!iface?.addressInfo) {
+          console.warn(`[manageServes] no addressInfo for ${packageId}/${interfaceId}, skipping`)
+          continue
+        }
+        internalPort = iface.addressInfo.internalPort
+        httpProxy = iface.addressInfo.scheme === 'http'
+      }
+
+      const localTarget = httpProxy
+        ? `http://${host}:${internalPort}`
+        : `tcp://${host}:${internalPort}`
+
+      const svcName = `svc:${packageId}-${interfaceId}`
+      config.services[svcName] = {
+        endpoints: { [`tcp:${port}`]: localTarget },
+      }
+    }
+  }
+
+  // Write config JSON to a temp file inside the subcontainer and apply it
+  const configJson = JSON.stringify(config)
+  const writeResult = await sub.exec([
+    'sh', '-c', `printf '%s' '${configJson.replace(/'/g, "'\\''")}' > ${SERVE_CONFIG_PATH}`,
+  ])
+  if (writeResult.exitCode !== 0) {
+    throw new Error(`Failed to write serve config: ${writeResult.stderr.toString()}`)
+  }
+
+  const applyResult = await sub.exec([
+    'tailscale',
+    '--socket=' + SOCKET,
+    'serve',
+    'set-config',
+    '--all',
+    SERVE_CONFIG_PATH,
+  ])
+  if (applyResult.exitCode !== 0) {
+    throw new Error(`tailscale serve set-config --all failed: ${applyResult.stderr.toString()}`)
+  }
+
+  console.info(`[manageServes] applied services config with ${Object.keys(config.services).length} service(s)`)
+}
 
 function getSpec(packageId: string, packageTitle: string, iFaces: string[][]) {
   return [
