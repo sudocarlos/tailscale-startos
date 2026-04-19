@@ -19,4 +19,5 @@ export const manifest = setupManifest({
     },
   },
   dependencies: {},
+  plugins: ['url-v0'],
 })

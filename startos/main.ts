@@ -2,7 +2,7 @@ import { sdk } from './sdk'
 import { statusJson } from './fileModels/status.json'
 import { storeJson } from './fileModels/store.json'
 import { parseTailscaleIp, parseDnsName } from './utils'
-import { applyServicesConfig } from './actions/manageServes'
+import { applyServicesConfig } from './serves'
 
 const UI_PORT = 8080
 const STATE_DIR = '/var/lib/tailscale'
