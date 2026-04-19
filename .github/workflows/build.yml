@@ -1,0 +1,51 @@
+name: Build PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} package
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            make_target: x86
+          - arch: aarch64
+            make_target: arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install build dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y squashfs-tools squashfs-tools-ng
+
+      - name: Install start-cli
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/Start9Labs/start-os/releases/latest | jq -r .tag_name)
+          curl -fsSL "https://github.com/Start9Labs/start-os/releases/download/${LATEST}/start-cli_x86_64-linux" -o /usr/local/bin/start-cli
+          chmod +x /usr/local/bin/start-cli
+
+      - name: Initialize developer key
+        run: start-cli init-key
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build ${{ matrix.arch }} package
+        run: make ${{ matrix.make_target }}
+
+      - name: Upload ${{ matrix.arch }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tailscale_${{ matrix.arch }}
+          path: tailscale_${{ matrix.arch }}.s9pk
