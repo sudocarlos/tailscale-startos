@@ -11,8 +11,6 @@ const SOCKET = '/var/run/tailscale/tailscaled.sock'
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info('Starting Tailscale!')
 
-  let servesRestored = false
-
   const mounts = sdk.Mounts.of().mountVolume({
     volumeId: 'tailscale',
     subpath: null,
@@ -70,7 +68,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             }
           }
 
-          // Persist IP and DNS name for use by actions
+          // Persist IP and DNS name for use by actions and the URL plugin
           try {
             const ipResult = await subcontainer.exec([
               'tailscale',
@@ -87,20 +85,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
             console.error('Failed to persist tailscale status:', e)
           }
 
-          // Restore tailscale serve configs from store on first Running transition
-          if (!servesRestored) {
-            servesRestored = true
-            try {
-              const store = (await storeJson.read().once()) || {}
-              if (Object.keys(store).length > 0) {
-                await applyServicesConfig(subcontainer, store, effects)
-                console.info('Restored tailscale serves from store')
-              }
-            } catch (e) {
-              console.error('Failed to restore tailscale serves:', e)
-            }
-          }
-
           return {
             result: 'success',
             message: 'Tailscale daemon is running',
@@ -109,6 +93,19 @@ export const main = sdk.setupMain(async ({ effects }) => {
         gracePeriod: 10_000,
       },
       requires: [],
+    })
+    .addOneshot('restore-serves', {
+      subcontainer,
+      exec: {
+        fn: async () => {
+          const store = (await storeJson.read().once()) || {}
+          if (Object.keys(store).length > 0) {
+            await applyServicesConfig(subcontainer, store)
+          }
+          return null
+        },
+      },
+      requires: ['tailscaled'],
     })
     .addDaemon('tailscale-web', {
       subcontainer,
@@ -128,6 +125,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
             errorMessage: 'The web interface is not yet ready',
           }),
       },
-      requires: ['tailscaled'],
+      requires: ['tailscaled', 'restore-serves'],
     })
 })

@@ -46,20 +46,21 @@ export const removeServe = sdk.Action.withInput(
     const { packageId: rawPkgId, interfaceId } = input.urlPluginMetadata
     const packageId = rawPkgId ?? 'startos'
 
+    // Use .once() to avoid "write after const" error
     const store: z.infer<typeof shape> =
-      (await storeJson.read().const(effects)) || {}
+      (await storeJson.read().once()) || {}
 
     if (store[packageId]?.[interfaceId] === undefined) {
       return
     }
 
-    // Remove the entry
+    // Remove the entry, preserving all other packages/interfaces
     const updated: z.infer<typeof shape> = {}
     for (const [pkg, ifaces] of Object.entries(store)) {
-      const filteredIfaces: Record<string, number> = {}
-      for (const [iface, port] of Object.entries(ifaces)) {
+      const filteredIfaces: z.infer<typeof shape>[string] = {}
+      for (const [iface, entry] of Object.entries(ifaces)) {
         if (pkg === packageId && iface === interfaceId) continue
-        filteredIfaces[iface] = port
+        filteredIfaces[iface] = entry
       }
       if (Object.keys(filteredIfaces).length > 0) {
         updated[pkg] = filteredIfaces
@@ -79,7 +80,7 @@ export const removeServe = sdk.Action.withInput(
       mounts,
       'tailscale-serve-remove',
       async (sub) => {
-        await applyServicesConfig(sub, updated, effects)
+        await applyServicesConfig(sub, updated)
       },
     )
 

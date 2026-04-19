@@ -10,32 +10,26 @@ export const registerUrlPlugin = sdk.setupOnInit(async (effects) =>
 
 export const exportUrls = sdk.plugin.url.setupExportedUrls(
   async ({ effects }) => {
+    // Reactive reads — framework re-runs this handler when either file changes.
     const store = (await storeJson.read().const(effects)) || {}
     const status = await statusJson.read().const(effects)
     if (!status) return
 
     for (const [packageId, ifaces] of Object.entries(store)) {
-      for (const [interfaceId, port] of Object.entries(ifaces)) {
-        let ssl = false
-        let internalPort = port
+      for (const [interfaceId, entry] of Object.entries(ifaces)) {
+        // Skip legacy entries — they have no hostId/scheme cached yet.
+        // The URL plugin tile will continue to show "Add Serve"; the user
+        // re-clicks once to supply the full metadata.
+        if (entry.hostId === '') continue
 
-        if (packageId === 'startos') {
-          ssl = true
-          internalPort = 443
-        } else {
-          const iface = await sdk.serviceInterface
-            .get(effects, { id: interfaceId, packageId })
-            .once()
-          const scheme = iface?.addressInfo?.scheme
-          ssl = scheme === 'http' || scheme === 'https'
-          internalPort = iface?.addressInfo?.internalPort ?? port
-        }
+        const { port, hostId, scheme, internalPort } = entry
+        const ssl = scheme === 'http' || scheme === 'https'
 
         await sdk.plugin.url
           .exportUrl(effects, {
             hostnameInfo: {
               packageId: packageId === 'startos' ? null : packageId,
-              hostId: interfaceId,
+              hostId,
               internalPort,
               ssl,
               public: true,

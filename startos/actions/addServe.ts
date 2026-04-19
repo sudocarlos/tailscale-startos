@@ -1,5 +1,5 @@
 import { z } from '@start9labs/start-sdk'
-import { shape, storeJson } from '../fileModels/store.json'
+import { shape, StoreEntry, storeJson } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
 import { assignPort } from '../utils'
@@ -39,22 +39,49 @@ export const addServe = sdk.Action.withInput(
 
   // execution
   async ({ effects, input }) => {
-    const { packageId: rawPkgId, interfaceId } = input.urlPluginMetadata
+    const { packageId: rawPkgId, interfaceId, hostId, internalPort } =
+      input.urlPluginMetadata
     const packageId = rawPkgId ?? 'startos'
 
+    // Use .once() to avoid "write after const" error
     const store: z.infer<typeof shape> =
-      (await storeJson.read().const(effects)) || {}
+      (await storeJson.read().once()) || {}
 
-    // Idempotent: if already configured, do nothing
-    if (store[packageId]?.[interfaceId] !== undefined) {
+    const existing = store[packageId]?.[interfaceId]
+
+    // Fully configured entry — nothing to do
+    if (existing !== undefined && existing.hostId !== '') {
       return
     }
 
-    const port = assignPort(store)
+    // Resolve scheme from the service interface (or hardcode for startos)
+    let scheme: StoreEntry['scheme']
+    let resolvedInternalPort: number
+
+    if (packageId === 'startos') {
+      scheme = 'https'
+      resolvedInternalPort = 443
+    } else {
+      const iface = await sdk.serviceInterface
+        .get(effects, { id: interfaceId, packageId })
+        .once()
+      scheme = (iface?.addressInfo?.scheme as StoreEntry['scheme']) ?? null
+      resolvedInternalPort = iface?.addressInfo?.internalPort ?? internalPort
+    }
+
+    // Reuse existing port on legacy-upgrade; assign new port for fresh entry
+    const port = existing !== undefined ? existing.port : assignPort(store)
+
+    const entry: StoreEntry = {
+      port,
+      hostId,
+      scheme,
+      internalPort: resolvedInternalPort,
+    }
 
     const updated: z.infer<typeof shape> = {
       ...store,
-      [packageId]: { ...(store[packageId] ?? {}), [interfaceId]: port },
+      [packageId]: { ...(store[packageId] ?? {}), [interfaceId]: entry },
     }
 
     const mounts = sdk.Mounts.of().mountVolume({
@@ -70,7 +97,7 @@ export const addServe = sdk.Action.withInput(
       mounts,
       'tailscale-serve-add',
       async (sub) => {
-        await applyServicesConfig(sub, updated, effects)
+        await applyServicesConfig(sub, updated)
       },
     )
 

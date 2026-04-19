@@ -1,6 +1,5 @@
 import { z } from '@start9labs/start-sdk'
 import { shape } from './fileModels/store.json'
-import { sdk } from './sdk'
 
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
@@ -9,13 +8,17 @@ const SOCKET = '/var/run/tailscale/tailscaled.sock'
  *
  * Resets all existing serves first, then adds each entry via
  * `tailscale serve --bg --https <port> <target>` for HTTP/HTTPS backends
- * or `tailscale serve --bg --tcp <port> <target>` for TCP.
+ * or `tailscale serve --bg --tcp <port> <target>` for TCP passthrough.
  *
- * Scheme mapping:
- *   packageId === 'startos'  → https+insecure://startos.startos:443  (ssl)
- *   addressInfo.scheme === 'http'   → https://<host>:<internalPort>  (ssl)
- *   addressInfo.scheme === 'https'  → https+insecure://<host>:<internalPort>  (ssl)
- *   else                            → tcp://<host>:<internalPort>  (no ssl)
+ * Entries with `hostId === ''` are legacy records that have not yet been
+ * upgraded by the user (they still hold a reserved port).  They are skipped
+ * here and in URL export; the user re-clicks "Add Serve" to self-heal them.
+ *
+ * Scheme mapping (all data is now cached in the store entry):
+ *   packageId === 'startos'       → https+insecure://startos.startos:443  (http proxy)
+ *   entry.scheme === 'http'       → https://<host>:<internalPort>          (http proxy)
+ *   entry.scheme === 'https'      → https+insecure://<host>:<internalPort> (http proxy)
+ *   entry.scheme === null         → tcp://<host>:<internalPort>            (tcp)
  */
 export async function applyServicesConfig(
   sub: {
@@ -24,7 +27,6 @@ export async function applyServicesConfig(
     ) => Promise<{ exitCode: number | null; stderr: Buffer | string }>
   },
   store: z.infer<typeof shape>,
-  effects: Parameters<typeof sdk.serviceInterface.get>[0],
 ): Promise<void> {
   // Reset all existing serves first
   const resetResult = await sub.exec([
@@ -41,35 +43,34 @@ export async function applyServicesConfig(
 
   let count = 0
   for (const [packageId, ifaces] of Object.entries(store)) {
-    for (const [interfaceId, port] of Object.entries(ifaces)) {
+    for (const [interfaceId, entry] of Object.entries(ifaces)) {
+      // Skip legacy entries — they have no cached metadata yet
+      if (entry.hostId === '') {
+        console.info(
+          `[serves] skipping legacy entry ${packageId}/${interfaceId} (re-click Add Serve to upgrade)`,
+        )
+        continue
+      }
+
+      const { port, scheme, internalPort } = entry
+      const host = `${packageId}.startos`
+
       let target: string
       let isHttpProxy: boolean
 
       if (packageId === 'startos') {
         target = 'https+insecure://startos.startos:443'
         isHttpProxy = true
+      } else if (scheme === 'http') {
+        target = `https://${host}:${internalPort}`
+        isHttpProxy = true
+      } else if (scheme === 'https') {
+        target = `https+insecure://${host}:${internalPort}`
+        isHttpProxy = true
       } else {
-        const host = `${packageId}.startos`
-        const iface = await sdk.serviceInterface
-          .get(effects, { id: interfaceId, packageId })
-          .once()
-        if (!iface?.addressInfo) {
-          console.warn(
-            `[serves] no addressInfo for ${packageId}/${interfaceId}, skipping`,
-          )
-          continue
-        }
-        const { scheme, internalPort } = iface.addressInfo
-        if (scheme === 'http') {
-          target = `https://${host}:${internalPort}`
-          isHttpProxy = true
-        } else if (scheme === 'https') {
-          target = `https+insecure://${host}:${internalPort}`
-          isHttpProxy = true
-        } else {
-          target = `tcp://${host}:${internalPort}`
-          isHttpProxy = false
-        }
+        // TCP passthrough
+        target = `tcp://${host}:${internalPort}`
+        isHttpProxy = false
       }
 
       const cmd = isHttpProxy

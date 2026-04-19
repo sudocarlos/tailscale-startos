@@ -7,7 +7,7 @@ import { shape } from './fileModels/store.json'
  */
 export function assignPort(store: z.infer<typeof shape>): number {
   const allPorts = Object.values(store).flatMap((ifaces) =>
-    Object.values(ifaces),
+    Object.values(ifaces).map((e) => e.port),
   )
   return Math.max(9999, ...allPorts) + 1
 }
