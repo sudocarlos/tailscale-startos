@@ -1,7 +1,7 @@
 import { sdk } from '../sdk'
-import { manageServes } from './manageServes'
-import { viewServes } from './viewServes'
+import { addServe } from './addServe'
+import { removeServe } from './removeServe'
 
 export const actions = sdk.Actions.of()
-  .addAction(manageServes)
-  .addAction(viewServes)
+  .addAction(addServe)
+  .addAction(removeServe)
