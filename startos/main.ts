@@ -53,6 +53,23 @@ export const main = sdk.setupMain(async ({ effects }) => {
               message: 'Waiting for tailscaled to be ready...',
             }
           }
+
+          // Only proceed once Tailscale has reached Running state.
+          // BackendState is "NoState" | "NeedsLogin" | "NeedsRoutineAuth" |
+          // "Stopped" | "Starting" | "Running".
+          let statusData: { BackendState?: string; Self?: { DNSName?: string } }
+          try {
+            statusData = JSON.parse(result.stdout.toString().trim())
+          } catch {
+            return { result: 'loading', message: 'Waiting for tailscaled to be ready...' }
+          }
+          if (statusData.BackendState !== 'Running') {
+            return {
+              result: 'loading',
+              message: `Tailscale state: ${statusData.BackendState ?? 'unknown'}`,
+            }
+          }
+
           // Persist IP and DNS name for use by actions
           try {
             const ipResult = await subcontainer.exec([
@@ -70,20 +87,22 @@ export const main = sdk.setupMain(async ({ effects }) => {
             console.error('Failed to persist tailscale status:', e)
           }
 
-          // Restore tailscale serve configs from store on first ready
+          // Restore tailscale serve configs from store on first Running transition
           if (!servesRestored) {
             servesRestored = true
             try {
               const store = (await storeJson.read().const(effects)) || {}
               for (const [packageId, ifaces] of Object.entries(store)) {
                 for (const [interfaceId, entry] of Object.entries(ifaces)) {
-                  const { port, httpProxy } = entry
+                  const { port } = entry
                   let host: string
                   let internalPort: number
+                  let httpProxy: boolean
 
                   if (packageId === 'startos') {
                     host = 'startos.startos'
                     internalPort = 80
+                    httpProxy = true
                   } else {
                     host = `${packageId}.startos`
                     const iface = await sdk.serviceInterface
@@ -91,6 +110,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
                       .once()
                     if (!iface?.addressInfo) continue
                     internalPort = iface.addressInfo.internalPort
+                    // Re-detect httpProxy from the live interface so stale store
+                    // values (e.g. coerced bare numbers) are always corrected.
+                    httpProxy = iface.addressInfo.scheme === 'http'
                   }
 
                   const key = proxyKey(packageId, interfaceId)
