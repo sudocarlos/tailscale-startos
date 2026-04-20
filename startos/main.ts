@@ -69,6 +69,14 @@ export const main = sdk.setupMain(async ({ effects }) => {
           console.info(`[tailscaled] BackendState: ${backendState}`)
 
           // Persist IP and DNS name once the node is fully connected.
+          // Only write when the values actually change. This ready check is
+          // polled continuously, and writing on every poll fires fs.watch
+          // events on status.json. Each event causes the SDK's FileHelper
+          // reactive `produce` loop to register a new abort listener on the
+          // parent AbortSignal of any active `.const()` read (notably the
+          // URL plugin's `setupExportedUrls` handler), eventually exceeding
+          // Node's default MaxListeners=10 and emitting a spurious warning.
+          // Skipping no-op writes eliminates the cause at the source.
           if (backendState === 'Running') {
             try {
               const ipResult = await subcontainer.exec([
@@ -80,7 +88,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
               if (ipResult.exitCode === 0) {
                 const ip = parseTailscaleIp(ipResult.stdout.toString())
                 const dnsName = parseDnsName(result.stdout.toString())
-                await statusJson.write(effects, { ip, dnsName })
+                const prev = await statusJson.read().once()
+                if (!prev || prev.ip !== ip || prev.dnsName !== dnsName) {
+                  await statusJson.write(effects, { ip, dnsName })
+                }
               }
             } catch (e) {
               console.error('Failed to persist tailscale status:', e)
