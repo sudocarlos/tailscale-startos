@@ -64,7 +64,7 @@ temp containers can reach the tailscaled Unix socket):
 **Key files:**
 
 - `tailscale/tailscaled.state` — node identity, keys, and tailnet membership
-- `startos/store.json` — maps `{ packageId: { interfaceId: tailnetPort } }` for all configured serves
+- `startos/store.json` — maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves
 - `startos/status.json` — cached `{ ip, dnsName }` written on each successful health check
 
 All state persists across restarts. The node retains its Tailscale IP address as
@@ -79,7 +79,7 @@ long as `tailscaled.state` is intact.
 3. Open the **Web Interface** from the StartOS UI.
 4. Log in with your Tailscale account to join the node to your tailnet.
 5. Optionally configure subnet routes, exit node, or Tailscale SSH from the web interface.
-6. Use **Manage Serves** to expose other StartOS services onto your tailnet.
+6. Use the **Add Serve** tile action on any installed service to expose it on your tailnet.
 
 No auth key or pre-configuration is required. All setup happens interactively
 through the Tailscale web interface.
@@ -98,7 +98,7 @@ All Tailscale configuration is managed through the **Tailscale web interface**
 | Exit node           | Web UI → This device → Exit node          |
 | Tailscale SSH       | Web UI → Settings → Tailscale SSH server  |
 | Logout / re-auth    | Web UI → Settings → Log out               |
-| Expose services     | Actions → Manage Serves                   |
+| Expose services     | URL plugin → Add Serve (tile action)      |
 
 ### Daemon environment
 
@@ -132,34 +132,45 @@ traffic is handled internally by tailscaled in userspace networking mode.
 
 ## Actions (StartOS UI)
 
-### Manage Serves
+### Add Serve / Remove Serve
 
-Exposes StartOS services on your tailnet via `tailscale serve`.
+These actions are exposed via the **URL plugin** (the "Add Serve" / "Remove Serve" table actions
+on service tiles in the StartOS UI).  They are not visible in the Actions panel directly.
 
-- Presents a list of all installed packages and their service interfaces.
-- Each selected service/interface is assigned a unique tailnet port (starting at
-  10000, incrementing by 1).
-- Existing port assignments are preserved when the list is updated.
-- Removing all serves resets the serve configuration entirely.
+**Add Serve** assigns a tailnet port to a `(packageId, interfaceId)` pair and configures
+`tailscale serve` to proxy or forward traffic to that service.
+
+- The assigned port starts at 10000 and increments by 1 above the current maximum.
+- Port assignments are stable: the same port is reused whenever "Add Serve" is clicked again
+  for an entry that was previously removed (the mapping is preserved as a legacy sentinel).
+- Interface metadata (`hostId`, `scheme`, `internalPort`) is read from the URL plugin prefill
+  and cached in `store.json` so that subsequent startups do not require additional API calls.
+- The action is idempotent: if the entry already has a `hostId` recorded, it returns immediately.
+  If the entry exists but has no `hostId` (legacy record), it is upgraded in place.
 
 **How it works internally:**
 
-For each serve, the service interface's `addressInfo.scheme` is checked:
+The `scheme` cached from `addressInfo` determines the `tailscale serve` target format:
 
-- `http` backend (or StartOS UI): `tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>` — Tailscale terminates TLS and reverse-proxies to the HTTP backend. The client-facing URL uses `https://`.
-- non-HTTP backend: `tailscale serve --bg --tcp <port> tcp://<pkg>.startos:<internalPort>` — raw TCP forwarding.
+- `scheme = 'http'` — `tailscale serve --bg --https <port> https://<pkg>.startos:<internalPort>`
+- `scheme = 'https'` — `tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>`
+- `scheme = null` (TCP) — `tailscale serve --bg --tcp <port> tcp://<pkg>.startos:<internalPort>`
+- `packageId = 'startos'` — `tailscale serve --bg --https <port> https+insecure://startos.startos:443`
 
-Before re-applying, `tailscale serve reset` is run to atomically replace the
-entire configuration. Serves are automatically restored on daemon startup from
-`store.json` after the first successful health check (`BackendState = Running`).
+Before re-applying, `tailscale serve reset` atomically replaces the entire configuration.
+
+**Legacy upgrade path:** If you are upgrading from a prior version of this package,
+existing entries in `store.json` will be detected as legacy (no `hostId`).  The URL
+plugin tile will continue to show "Add Serve".  Click it once to supply the full
+metadata — the existing tailnet port is preserved.
 
 ### View Serves
 
 Displays all currently configured serves with their full tailnet addresses.
 
 - Shows both the Tailscale IP and MagicDNS hostname for each serve.
-- Reads port assignments from `store.json` and scheme from the service interface
-  metadata — no subprocess required.
+- Reads port assignments and all metadata from `store.json` — no subprocess or
+  additional API call required.
 - Disabled when no serves are configured.
 - Only available while the service is running.
 
@@ -190,9 +201,9 @@ Displays all currently configured serves with their full tailnet addresses.
 | `tailscale-web` | Web Interface    | TCP port 8080 is listening                |
 
 On each successful `tailscaled` health check, the node's Tailscale IP and
-MagicDNS name are written to `startos/status.json` for use by the View Serves
-action. Serves from `store.json` are also restored on the first successful
-health check after startup.
+MagicDNS name are written to `startos/status.json`.  Once `tailscaled` is
+healthy, the `restore-serves` oneshot runs `applyServicesConfig` to restore all
+non-legacy entries from `store.json` before `tailscale-web` starts.
 
 ---
 
@@ -254,21 +265,29 @@ daemons:
     health: tailscale status --json, BackendState=Running
     on_ready:
       - write ip + dnsName to startos/status.json
-      - restore tailscale serve rules from startos/store.json (once, via CLI)
+  - id: restore-serves   # oneshot; runs after tailscaled, blocks tailscale-web
+    mechanism: |
+      read startos/store.json once
+      tailscale serve reset
+      for each non-legacy entry (hostId != ''):
+        scheme=http:    tailscale serve --bg --https <port> https://<pkg>.startos:<internalPort>
+        scheme=https:   tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>
+        scheme=null:    tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
+        packageId=startos: tailscale serve --bg --https <port> https+insecure://startos.startos:443
   - id: tailscale-web
     command: tailscale web --listen=0.0.0.0:8080
     health: port 8080 listening
-    requires: [tailscaled]
+    requires: [tailscaled, restore-serves]
 actions:
-  - id: manage-serves
-    description: Add/remove tailscale serve rules for installed StartOS services
-    input: list of { packageId, interfaceId } pairs
+  - id: add-serve   # exposed via URL plugin table action
+    description: Assign a tailnet port and configure tailscale serve for a service interface
+    input: urlPluginMetadata { packageId, interfaceId, hostId, internalPort }
     state: startos/store.json
-    mechanism: |
-      tailscale serve reset
-      for each serve:
-        http backend:     tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>
-        non-http backend: tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
+    schema: { packageId: { interfaceId: { port, hostId, scheme, internalPort } } }
+    idempotent: skip if hostId already stored; upgrade legacy sentinel (hostId='') in place
+  - id: remove-serve   # exposed via URL plugin table action
+    description: Remove a tailscale serve for a service interface
+    state: startos/store.json
   - id: view-serves
     description: Display tailnet URLs for all configured serves
     state: startos/store.json + startos/status.json
