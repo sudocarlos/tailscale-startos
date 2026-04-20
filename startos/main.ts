@@ -48,46 +48,50 @@ export const main = sdk.setupMain(async ({ effects }) => {
           if (result.exitCode !== 0) {
             return {
               result: 'loading',
-              message: 'Waiting for tailscaled to be ready...',
+              message: 'Waiting for tailscaled socket...',
             }
           }
 
-          // Only proceed once Tailscale has reached Running state.
+          // Socket is responsive. Parse state for informational purposes and
+          // to conditionally persist IP/DNS (only available once Running).
           // BackendState is "NoState" | "NeedsLogin" | "NeedsRoutineAuth" |
           // "Stopped" | "Starting" | "Running".
+          // We do NOT block on Running here — the web UI must be reachable in
+          // NeedsLogin so the user can authenticate on a fresh install.
           let statusData: { BackendState?: string; Self?: { DNSName?: string } }
           try {
             statusData = JSON.parse(result.stdout.toString().trim())
           } catch {
-            return { result: 'loading', message: 'Waiting for tailscaled to be ready...' }
-          }
-          if (statusData.BackendState !== 'Running') {
-            return {
-              result: 'loading',
-              message: `Tailscale state: ${statusData.BackendState ?? 'unknown'}`,
-            }
+            statusData = {}
           }
 
-          // Persist IP and DNS name for use by actions and the URL plugin
-          try {
-            const ipResult = await subcontainer.exec([
-              'tailscale',
-              '--socket=' + SOCKET,
-              'ip',
-              '-4',
-            ])
-            if (ipResult.exitCode === 0) {
-              const ip = parseTailscaleIp(ipResult.stdout.toString())
-              const dnsName = parseDnsName(result.stdout.toString())
-              await statusJson.write(effects, { ip, dnsName })
+          const backendState = statusData.BackendState ?? 'unknown'
+          console.info(`[tailscaled] BackendState: ${backendState}`)
+
+          // Persist IP and DNS name once the node is fully connected.
+          if (backendState === 'Running') {
+            try {
+              const ipResult = await subcontainer.exec([
+                'tailscale',
+                '--socket=' + SOCKET,
+                'ip',
+                '-4',
+              ])
+              if (ipResult.exitCode === 0) {
+                const ip = parseTailscaleIp(ipResult.stdout.toString())
+                const dnsName = parseDnsName(result.stdout.toString())
+                await statusJson.write(effects, { ip, dnsName })
+              }
+            } catch (e) {
+              console.error('Failed to persist tailscale status:', e)
             }
-          } catch (e) {
-            console.error('Failed to persist tailscale status:', e)
           }
 
           return {
             result: 'success',
-            message: 'Tailscale daemon is running',
+            message: backendState === 'Running'
+              ? 'Tailscale daemon is running'
+              : `Tailscale daemon ready (${backendState})`,
           }
         },
         gracePeriod: 10_000,
