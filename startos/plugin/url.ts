@@ -71,6 +71,14 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
           return
         }
 
+        // PluginHostnameInfo only exposes `ssl: boolean`, which StartOS maps
+        // to an HTTPS/HTTP protocol label in the URL plugin tile. There is no
+        // TCP option in the current SDK type, so raw TCP serves (scheme ===
+        // null, e.g. ZMQ, Bitcoin peer) are mislabelled as "HTTP" in the UI.
+        // The serve itself is configured correctly with `--tcp` and works as
+        // expected; only the displayed protocol label is wrong. Track the
+        // upstream SDK/platform change to add a TCP label before reworking
+        // this.
         const ssl = scheme === 'http' || scheme === 'ws' || scheme === 'https' || scheme === 'wss'
 
         await sdk.plugin.url
