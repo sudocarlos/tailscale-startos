@@ -113,6 +113,40 @@ export const main = sdk.setupMain(async ({ effects }) => {
       subcontainer,
       exec: {
         fn: async () => {
+          // The tailscaled ready check returns as soon as the socket is alive
+          // (BackendState may still be NoState/Starting) so the web UI can
+          // unblock for fresh installs in NeedsLogin. Serve commands, however,
+          // require a populated netMap — issuing `tailscale serve reset`
+          // before the control-plane handshake completes fails with
+          // "netMap is nil". Poll BackendState here so the restore is silent.
+          const POLL_INTERVAL_MS = 500
+          const POLL_TIMEOUT_MS = 30_000
+          const deadline = Date.now() + POLL_TIMEOUT_MS
+
+          while (Date.now() < deadline) {
+            const r = await subcontainer.exec([
+              'tailscale',
+              '--socket=' + SOCKET,
+              'status',
+              '--json',
+            ])
+            if (r.exitCode === 0) {
+              let st: { BackendState?: string } = {}
+              try {
+                st = JSON.parse(r.stdout.toString())
+              } catch {}
+              const state = st.BackendState ?? ''
+              if (state !== '' && state !== 'NoState' && state !== 'Starting') break
+            }
+            await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+          }
+
+          if (Date.now() >= deadline) {
+            console.warn(
+              '[restore-serves] timed out waiting for tailscaled BackendState; proceeding anyway',
+            )
+          }
+
           const store = (await storeJson.read().once()) || {}
           if (Object.keys(store).length > 0) {
             await applyServicesConfig(subcontainer, store)
