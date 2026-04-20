@@ -14,11 +14,14 @@ const SOCKET = '/var/run/tailscale/tailscaled.sock'
  * upgraded by the user (they still hold a reserved port).  They are skipped
  * here and in URL export; the user re-clicks "Add Serve" to self-heal them.
  *
- * Scheme mapping (all data is now cached in the store entry):
- *   packageId === 'startos'       → https+insecure://startos.startos:443  (http proxy)
- *   entry.scheme === 'http'       → https://<host>:<internalPort>          (http proxy)
- *   entry.scheme === 'https'      → https+insecure://<host>:<internalPort> (http proxy)
- *   entry.scheme === null         → tcp://<host>:<internalPort>            (tcp)
+ * Scheme mapping (upstream → tailscale serve target):
+ *   entry.scheme === 'http'   → http://<host>:<internalPort>              (plain HTTP upstream)
+ *   entry.scheme === 'https'  → https+insecure://<host>:<internalPort>    (HTTPS upstream, skip verify)
+ *   entry.scheme === null     → tcp://<host>:<internalPort>               (TCP passthrough)
+ *
+ * In all HTTP/HTTPS cases the --https <tailnetPort> flag makes tailscale
+ * serve the endpoint with a valid Tailscale TLS cert on the tailnet side.
+ * The target scheme only describes what the upstream container speaks.
  */
 export async function applyServicesConfig(
   sub: {
@@ -67,7 +70,7 @@ export async function applyServicesConfig(
       let isHttpProxy: boolean
 
       if (scheme === 'http') {
-        target = `https://${host}:${internalPort}`
+        target = `http://${host}:${internalPort}`
         isHttpProxy = true
       } else if (scheme === 'https') {
         target = `https+insecure://${host}:${internalPort}`
