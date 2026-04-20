@@ -15,13 +15,13 @@ const SOCKET = '/var/run/tailscale/tailscaled.sock'
  * here and in URL export; the user re-clicks "Add Serve" to self-heal them.
  *
  * Scheme mapping (upstream → tailscale serve target):
- *   entry.scheme === 'http'   → http://<host>:<internalPort>              (plain HTTP upstream)
- *   entry.scheme === 'https'  → https+insecure://<host>:<internalPort>    (HTTPS upstream, skip verify)
- *   entry.scheme === null     → tcp://<host>:<internalPort>               (TCP passthrough)
+ *   'http' | 'ws'          → http://<host>:<port>              --https  (HTTP upstream)
+ *   'https' | 'wss'        → https+insecure://<host>:<port>    --https  (HTTPS upstream, skip verify)
+ *   'ssh' | 'dns' | null   → tcp://<host>:<port>               --tcp    (raw TCP passthrough)
+ *   <anything else>        → tcp://<host>:<port>               --tcp    (unknown → safe default)
  *
- * In all HTTP/HTTPS cases the --https <tailnetPort> flag makes tailscale
- * serve the endpoint with a valid Tailscale TLS cert on the tailnet side.
- * The target scheme only describes what the upstream container speaks.
+ * The --https <tailnetPort> flag controls TLS on the tailnet-facing side and
+ * is independent of the upstream target scheme.
  */
 export async function applyServicesConfig(
   sub: {
@@ -69,17 +69,21 @@ export async function applyServicesConfig(
       let target: string
       let isHttpProxy: boolean
 
-      if (scheme === 'http') {
+      if (scheme === 'http' || scheme === 'ws') {
         target = `http://${host}:${internalPort}`
         isHttpProxy = true
-      } else if (scheme === 'https') {
+      } else if (scheme === 'https' || scheme === 'wss') {
         target = `https+insecure://${host}:${internalPort}`
         isHttpProxy = true
       } else {
-        // TCP passthrough
+        // TCP passthrough: null, 'ssh', 'dns', or any unrecognised scheme
         target = `tcp://${host}:${internalPort}`
         isHttpProxy = false
       }
+
+      console.info(
+        `[serves] ${packageId}/${interfaceId}: scheme=${scheme} → ${isHttpProxy ? '--https' : '--tcp'} ${port} ${target}`,
+      )
 
       const cmd = isHttpProxy
         ? [

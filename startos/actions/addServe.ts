@@ -1,5 +1,5 @@
 import { z } from '@start9labs/start-sdk'
-import { shape, StoreEntry, storeJson } from '../fileModels/store.json'
+import { shape, storeJson } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
 import { assignPort } from '../utils'
@@ -62,19 +62,34 @@ export const addServe = sdk.Action.withInput(
     }
 
     // Resolve scheme from the service interface
-    let scheme: StoreEntry['scheme']
+    let scheme: string | null
     let resolvedInternalPort: number
 
     const iface = await sdk.serviceInterface
       .get(effects, { id: interfaceId, packageId })
       .once()
-    scheme = (iface?.addressInfo?.scheme as StoreEntry['scheme']) ?? null
+
+    console.info(
+      `[addServe] ${packageId}/${interfaceId} iface:`,
+      JSON.stringify({
+        type: iface?.type,
+        scheme: iface?.addressInfo?.scheme,
+        sslScheme: iface?.addressInfo?.sslScheme,
+        internalPort: iface?.addressInfo?.internalPort,
+      }),
+    )
+
+    scheme = iface?.addressInfo?.scheme ?? null
     resolvedInternalPort = iface?.addressInfo?.internalPort ?? internalPort
+
+    console.info(
+      `[addServe] ${packageId}/${interfaceId} resolved → scheme=${scheme}, internalPort=${resolvedInternalPort}, tailnetPort=${existing !== undefined ? existing.port : '(new)'}`,
+    )
 
     // Reuse existing port on legacy-upgrade; assign new port for fresh entry
     const port = existing !== undefined ? existing.port : assignPort(store)
 
-    const entry: StoreEntry = {
+    const entry = {
       port,
       hostId,
       scheme,

@@ -71,7 +71,7 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
           return
         }
 
-        const ssl = scheme === 'http' || scheme === 'https'
+        const ssl = scheme === 'http' || scheme === 'ws' || scheme === 'https' || scheme === 'wss'
 
         await sdk.plugin.url
           .exportUrl(effects, {

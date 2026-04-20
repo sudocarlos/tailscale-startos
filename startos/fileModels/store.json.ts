@@ -19,10 +19,15 @@ export const storeEntry = z.object({
    */
   hostId: z.string(),
   /**
-   * Upstream scheme ('http' | 'https') or null for TCP passthrough.
+   * Upstream scheme as returned by addressInfo.scheme, or null for TCP
+   * passthrough.  Supported values:
+   *   'http' | 'ws'          → http proxy (HTTP upstream)
+   *   'https' | 'wss'        → http proxy (HTTPS upstream, skip verify)
+   *   'ssh' | 'dns' | null   → TCP passthrough
+   * Any unrecognised string is also treated as TCP passthrough.
    * null on legacy entries.
    */
-  scheme: z.enum(['http', 'https']).nullable(),
+  scheme: z.string().nullable(),
   /** Port the upstream service listens on.  0 on legacy entries. */
   internalPort: z.number().int().min(0).max(65535),
 })
