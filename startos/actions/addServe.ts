@@ -43,44 +43,50 @@ export const addServe = sdk.Action.withInput(
       input.urlPluginMetadata
     const packageId = rawPkgId ?? 'startos'
 
-    // StartOS self-target is not supported: the node is already on the
-    // tailnet by IP, and the platform has no :443 binding registered.
-    if (packageId === 'startos') {
-      console.warn('[addServe] ignoring startos self-target — not supported')
-      return
-    }
-
     // Use .once() to avoid "write after const" error
     const store: z.infer<typeof shape> =
       (await storeJson.read().once()) || {}
 
     const existing = store[packageId]?.[interfaceId]
 
+    console.info(
+      `[addServe] ${packageId}/${interfaceId} existing:`,
+      JSON.stringify(existing ?? null),
+    )
+
     // Fully configured entry — nothing to do
     if (existing !== undefined && existing.hostId !== '') {
+      console.info(`[addServe] ${packageId}/${interfaceId} already configured — skipping`)
       return
     }
 
-    // Resolve scheme from the service interface
+    // Resolve scheme and internal port from the service interface.
+    // StarOS itself has no registered service interface; its UI is always
+    // reachable at http://startos:80 inside the container network.
     let scheme: string | null
     let resolvedInternalPort: number
 
-    const iface = await sdk.serviceInterface
-      .get(effects, { id: interfaceId, packageId })
-      .once()
+    if (packageId === 'startos') {
+      scheme = 'http'
+      resolvedInternalPort = 80
+    } else {
+      const iface = await sdk.serviceInterface
+        .get(effects, { id: interfaceId, packageId })
+        .once()
 
-    console.info(
-      `[addServe] ${packageId}/${interfaceId} iface:`,
-      JSON.stringify({
-        type: iface?.type,
-        scheme: iface?.addressInfo?.scheme,
-        sslScheme: iface?.addressInfo?.sslScheme,
-        internalPort: iface?.addressInfo?.internalPort,
-      }),
-    )
+      console.info(
+        `[addServe] ${packageId}/${interfaceId} iface:`,
+        JSON.stringify({
+          type: iface?.type,
+          scheme: iface?.addressInfo?.scheme,
+          sslScheme: iface?.addressInfo?.sslScheme,
+          internalPort: iface?.addressInfo?.internalPort,
+        }),
+      )
 
-    scheme = iface?.addressInfo?.scheme ?? null
-    resolvedInternalPort = iface?.addressInfo?.internalPort ?? internalPort
+      scheme = iface?.addressInfo?.scheme ?? null
+      resolvedInternalPort = iface?.addressInfo?.internalPort ?? internalPort
+    }
 
     console.info(
       `[addServe] ${packageId}/${interfaceId} resolved → scheme=${scheme}, internalPort=${resolvedInternalPort}, tailnetPort=${existing !== undefined ? existing.port : '(new)'}`,
