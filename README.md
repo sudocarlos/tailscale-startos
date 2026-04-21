@@ -141,6 +141,8 @@ on service tiles in the StartOS UI).  They are not visible in the Actions panel 
 `tailscale serve` to proxy or forward traffic to that service.
 
 - The assigned port starts at 10000 and increments by 1 above the current maximum.
+- **Custom port selection:** an optional port number can be supplied when clicking "Add Serve"
+  to override the auto-assigned value.
 - Port assignments are stable: the same port is reused whenever "Add Serve" is clicked again
   for an entry that was previously removed (the mapping is preserved as a legacy sentinel).
 - Interface metadata (`hostId`, `scheme`, `internalPort`) is read from the URL plugin prefill
@@ -152,9 +154,9 @@ on service tiles in the StartOS UI).  They are not visible in the Actions panel 
 
 The `scheme` cached from `addressInfo` determines the `tailscale serve` target format:
 
-- `scheme = 'http'` — `tailscale serve --bg --https <port> https://<pkg>.startos:<internalPort>`
-- `scheme = 'https'` — `tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>`
-- `scheme = null` (TCP) — `tailscale serve --bg --tcp <port> tcp://<pkg>.startos:<internalPort>`
+- `scheme = 'http'` or `'ws'` — `tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>` (Tailscale terminates TLS)
+- `scheme = 'https'` or `'wss'` — `tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>`
+- `scheme = null` / TCP — `tailscale serve --bg --tcp <port> tcp://<pkg>.startos:<internalPort>`
 - `packageId = 'startos'` — `tailscale serve --bg --https <port> https+insecure://startos.startos:443`
 
 Before re-applying, `tailscale serve reset` atomically replaces the entire configuration.
@@ -163,16 +165,6 @@ Before re-applying, `tailscale serve reset` atomically replaces the entire confi
 existing entries in `store.json` will be detected as legacy (no `hostId`).  The URL
 plugin tile will continue to show "Add Serve".  Click it once to supply the full
 metadata — the existing tailnet port is preserved.
-
-### View Serves
-
-Displays all currently configured serves with their full tailnet addresses.
-
-- Shows both the Tailscale IP and MagicDNS hostname for each serve.
-- Reads port assignments and all metadata from `store.json` — no subprocess or
-  additional API call required.
-- Disabled when no serves are configured.
-- Only available while the service is running.
 
 ---
 
@@ -270,9 +262,9 @@ daemons:
       read startos/store.json once
       tailscale serve reset
       for each non-legacy entry (hostId != ''):
-        scheme=http:    tailscale serve --bg --https <port> https://<pkg>.startos:<internalPort>
-        scheme=https:   tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>
-        scheme=null:    tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
+        scheme=http/ws:   tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>
+        scheme=https/wss: tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>
+        scheme=null/tcp:  tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
         packageId=startos: tailscale serve --bg --https <port> https+insecure://startos.startos:443
   - id: tailscale-web
     command: tailscale web --listen=0.0.0.0:8080
@@ -282,14 +274,11 @@ actions:
   - id: add-serve   # exposed via URL plugin table action
     description: Assign a tailnet port and configure tailscale serve for a service interface
     input: urlPluginMetadata { packageId, interfaceId, hostId, internalPort }
+    optional_input: port (number) — custom port override; defaults to auto-assign from 10000
     state: startos/store.json
     schema: { packageId: { interfaceId: { port, hostId, scheme, internalPort } } }
     idempotent: skip if hostId already stored; upgrade legacy sentinel (hostId='') in place
   - id: remove-serve   # exposed via URL plugin table action
     description: Remove a tailscale serve for a service interface
     state: startos/store.json
-  - id: view-serves
-    description: Display tailnet URLs for all configured serves
-    state: startos/store.json + startos/status.json
-    url_scheme: https for http backends (Tailscale terminates TLS), tcp otherwise
 ```
