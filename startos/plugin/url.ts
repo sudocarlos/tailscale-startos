@@ -25,9 +25,6 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
     }> = []
 
     for (const [packageId, ifaces] of Object.entries(store)) {
-      // Skip StartOS self-target — not a supported serve target.
-      if (packageId === 'startos') continue
-
       for (const [interfaceId, entry] of Object.entries(ifaces)) {
         // Skip legacy entries — they have no hostId/scheme cached yet.
         // The URL plugin tile will continue to show "Add Serve"; the user
@@ -50,25 +47,30 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
       candidates.map(async ({ packageId, interfaceId, port, hostId, scheme }) => {
         let internalPort: number
 
-        try {
-          const iface = await sdk.serviceInterface
-            .get(effects, { id: interfaceId, packageId })
-            .once()
+        if (packageId === 'startos') {
+          // StarOS has no registered service interface; UI is always at port 80
+          internalPort = 80
+        } else {
+          try {
+            const iface = await sdk.serviceInterface
+              .get(effects, { id: interfaceId, packageId })
+              .once()
 
-          if (!iface || !iface.addressInfo) {
+            if (!iface || !iface.addressInfo) {
+              console.warn(
+                `[plugin/url] interface ${packageId}/${interfaceId} not found (package uninstalled?), skipping`,
+              )
+              return
+            }
+
+            internalPort = iface.addressInfo.internalPort
+          } catch (e) {
             console.warn(
-              `[plugin/url] interface ${packageId}/${interfaceId} not found (package uninstalled?), skipping`,
+              `[plugin/url] could not resolve internalPort for ${packageId}/${interfaceId}, skipping:`,
+              e,
             )
             return
           }
-
-          internalPort = iface.addressInfo.internalPort
-        } catch (e) {
-          console.warn(
-            `[plugin/url] could not resolve internalPort for ${packageId}/${interfaceId}, skipping:`,
-            e,
-          )
-          return
         }
 
         // PluginHostnameInfo only exposes `ssl: boolean`, which StartOS maps

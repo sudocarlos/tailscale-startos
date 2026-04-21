@@ -46,14 +46,6 @@ export async function applyServicesConfig(
 
   let count = 0
   for (const [packageId, ifaces] of Object.entries(store)) {
-    // Skip StartOS self-target — not a supported serve target.
-    if (packageId === 'startos') {
-      console.info(
-        `[serves] skipping startos self-target (not supported)`,
-      )
-      continue
-    }
-
     for (const [interfaceId, entry] of Object.entries(ifaces)) {
       // Skip legacy entries — they have no cached metadata yet
       if (entry.hostId === '') {
@@ -64,7 +56,8 @@ export async function applyServicesConfig(
       }
 
       const { port, scheme, internalPort } = entry
-      const host = `${packageId}.startos`
+      // StarOS UI is reachable at 'startos'; other services use '<packageId>.startos'
+      const host = packageId === 'startos' ? 'startos' : `${packageId}.startos`
 
       let target: string
       let isHttpProxy: boolean
