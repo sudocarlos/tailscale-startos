@@ -3,8 +3,7 @@ import { statusJson } from './fileModels/status.json'
 import { storeJson } from './fileModels/store.json'
 import { parseTailscaleIp, parseDnsName } from './utils'
 import { applyServicesConfig } from './serves'
-
-const UI_PORT = 8080
+import { UI_PORT } from './constants'
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
