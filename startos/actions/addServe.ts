@@ -2,7 +2,8 @@ import { z } from '@start9labs/start-sdk'
 import { shape, storeJson } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
-import { assignPort } from '../utils'
+import { assignPort, isPortAvailable, BLOCKED_PORTS } from '../utils'
+import { UI_PORT } from '../constants'
 
 const STATE_DIR = '/var/lib/tailscale'
 
@@ -15,6 +16,16 @@ const inputSpec = InputSpec.of({
     hostId: string
     internalPort: number
   }>(),
+  port: Value.number({
+    name: 'Tailnet Port',
+    description:
+      'Port to expose on your Tailscale network. Leave blank to auto-assign.',
+    required: false,
+    integer: true,
+    min: 1,
+    max: 65535,
+    placeholder: 'auto-assign',
+  }),
 })
 
 export const addServe = sdk.Action.withInput(
@@ -42,7 +53,6 @@ export const addServe = sdk.Action.withInput(
     const { packageId: rawPkgId, interfaceId, hostId, internalPort } =
       input.urlPluginMetadata
     const packageId = rawPkgId ?? 'startos'
-
     // Use .once() to avoid "write after const" error
     const store: z.infer<typeof shape> =
       (await storeJson.read().once()) || {}
@@ -92,8 +102,25 @@ export const addServe = sdk.Action.withInput(
       `[addServe] ${packageId}/${interfaceId} resolved → scheme=${scheme}, internalPort=${resolvedInternalPort}, tailnetPort=${existing !== undefined ? existing.port : '(new)'}`,
     )
 
-    // Reuse existing port on legacy-upgrade; assign new port for fresh entry
-    const port = existing !== undefined ? existing.port : assignPort(store)
+    // Determine tailnet port:
+    //   1. Legacy-upgrade: reuse the existing stored port.
+    //   2. User supplied a port: validate it, then use it.
+    //   3. Blank: auto-assign the next sequential port.
+    let port: number
+    if (existing !== undefined) {
+      port = existing.port
+    } else if (input.port !== null && input.port !== undefined) {
+      if (!isPortAvailable(store, input.port)) {
+        const blocked = [...BLOCKED_PORTS].join(', ')
+        return sdk.Action.result.failure(
+          `Port ${input.port} is reserved or already in use. ` +
+          `Blocked ports: ${blocked}. Choose a different port or leave blank to auto-assign.`,
+        )
+      }
+      port = input.port
+    } else {
+      port = assignPort(store)
+    }
 
     const entry = {
       port,
