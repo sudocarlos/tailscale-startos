@@ -3,7 +3,6 @@ import { shape, storeJson } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
 import { assignPort, isPortAvailable, BLOCKED_PORTS } from '../utils'
-import { UI_PORT } from '../constants'
 
 const STATE_DIR = '/var/lib/tailscale'
 
@@ -21,6 +20,7 @@ const inputSpec = InputSpec.of({
     description:
       'Port to expose on your Tailscale network. Leave blank to auto-assign.',
     required: false,
+    default: null,
     integer: true,
     min: 1,
     max: 65535,
@@ -112,7 +112,7 @@ export const addServe = sdk.Action.withInput(
     } else if (input.port !== null && input.port !== undefined) {
       if (!isPortAvailable(store, input.port)) {
         const blocked = [...BLOCKED_PORTS].join(', ')
-        return sdk.Action.result.failure(
+        throw new Error(
           `Port ${input.port} is reserved or already in use. ` +
           `Blocked ports: ${blocked}. Choose a different port or leave blank to auto-assign.`,
         )
