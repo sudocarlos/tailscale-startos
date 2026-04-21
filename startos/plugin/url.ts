@@ -81,12 +81,14 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
         // expected; only the displayed protocol label is wrong. Track the
         // upstream SDK/platform change to add a TCP label before reworking
         // this.
-        const ssl = scheme === 'http' || scheme === 'ws' || scheme === 'https' || scheme === 'wss'
+        const ssl = scheme === 'https' || scheme === 'wss'
 
         await sdk.plugin.url
           .exportUrl(effects, {
             hostnameInfo: {
-              packageId,
+              // StarOS self-target uses packageId=null in platform terms;
+              // other services use their string packageId.
+              packageId: packageId === 'startos' ? null : packageId,
               hostId,
               internalPort,
               ssl,

@@ -49,8 +49,14 @@ export const addServe = sdk.Action.withInput(
 
     const existing = store[packageId]?.[interfaceId]
 
+    console.info(
+      `[addServe] ${packageId}/${interfaceId} existing:`,
+      JSON.stringify(existing ?? null),
+    )
+
     // Fully configured entry — nothing to do
     if (existing !== undefined && existing.hostId !== '') {
+      console.info(`[addServe] ${packageId}/${interfaceId} already configured — skipping`)
       return
     }
 
