@@ -346,11 +346,20 @@ actions:
   - id: remove-serve   # exposed via URL plugin table action
     description: Remove a tailscale serve for a service interface
     state: startos/store.json
-  - id: login   # visible in the Actions panel
-    description: Authenticate using a Tailscale auth key (headless login)
-    input: authKey (string, required) — tskey-auth-... from admin console
+  - id: set-machine-name   # visible in the Actions panel
+    description: Set the hostname advertised on the tailnet; critical first-run task blocks startup until completed
+    input: machineName (string, required, default 'startos') — 1–63 chars, lowercase letters/numbers/hyphens only
     behavior: |
-      tailscale login --auth-key=<key>
-      poll BackendState until Running (30s timeout)
-      write ip + dnsName to startos/status.json (triggers URL plugin refresh)
+      write machineName + hostnameSet=false to startos/store.json
+      if daemon running: tailscale set --hostname=<name> via shared temp container, then hostnameSet=true
+      if daemon stopped: startup set-hostname oneshot applies the name on next start
+  - id: get-started   # visible in the Actions panel
+    description: Authenticate to Tailscale; optional auth key for headless login, or leave blank to use the web UI
+    input: authKey (string, optional) — tskey-auth-... from admin console; leave blank to sign in via web UI
+    behavior: |
+      if authKey blank: return immediately (user logs in via web UI)
+      if authKey provided:
+        tailscale login --auth-key=<key>
+        poll BackendState until Running (30s timeout)
+        write ip + dnsName to startos/status.json (triggers URL plugin refresh)
 ```
