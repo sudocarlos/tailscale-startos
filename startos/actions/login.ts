@@ -30,7 +30,7 @@ export const login = sdk.Action.withInput(
   async () => ({
     name: 'Login with Auth Key',
     description:
-      'Authenticate to your Tailscale network using an auth key. Useful for headless provisioning without the web UI.',
+      'Authenticate to your Tailscale network using an auth key. Useful for headless provisioning without the web UI. You can also log in interactively via the Open UI link in the status panel of the Tailscale dashboard.',
     warning: null,
     allowedStatuses: 'only-running',
     group: null,
