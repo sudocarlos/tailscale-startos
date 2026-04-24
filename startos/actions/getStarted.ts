@@ -30,7 +30,7 @@ export const getStarted = sdk.Action.withInput(
 
   // metadata
   async () => ({
-    name: 'Get Started',
+    name: 'Get Started - Login',
     description:
       'Complete first-time setup. Provide a Tailscale auth key for headless login, ' +
       'or leave blank and open the Web UI to sign in interactively after the service starts.',
