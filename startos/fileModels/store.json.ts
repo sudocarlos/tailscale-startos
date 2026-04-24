@@ -94,7 +94,7 @@ const currentShape = z.object({
 })
 
 export const shape = z
-  .union([currentShape, servesShape])
+  .union([servesShape, currentShape])
   .transform((value) =>
     'serves' in value
       ? (value as z.infer<typeof currentShape>)
