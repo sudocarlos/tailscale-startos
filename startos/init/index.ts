@@ -4,7 +4,22 @@ import { setInterfaces } from '../interfaces'
 import { versionGraph } from '../versions'
 import { restoreInit } from '../backups'
 import { actions } from '../actions'
+import { getStarted } from '../actions/getStarted'
 import { registerUrlPlugin, exportUrls } from '../plugin/url'
+import type { Effects } from '@start9labs/start-sdk/base/lib/types'
+
+async function scheduleGetStarted(
+  effects: Effects,
+  kind: 'install' | 'update' | 'restore' | null,
+): Promise<void> {
+  if (kind !== 'install') return
+  await sdk.action.createOwnTask(effects, getStarted, 'important', {
+    reason:
+      'Authenticate Tailscale: provide an auth key for headless login, ' +
+      'or open the Web UI to sign in interactively.',
+    replayId: 'get-started-first-launch',
+  })
+}
 
 export const init = sdk.setupInit(
   restoreInit,
@@ -14,6 +29,7 @@ export const init = sdk.setupInit(
   actions,
   registerUrlPlugin,
   exportUrls,
+  scheduleGetStarted,
 )
 
 export const uninit = sdk.setupUninit(versionGraph)
