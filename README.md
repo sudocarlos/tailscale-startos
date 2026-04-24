@@ -88,6 +88,9 @@ long as `tailscaled.state` is intact.
 No auth key or pre-configuration is required beyond the machine name step.
 All other setup happens interactively through the Tailscale web interface.
 
+Alternatively, use the **Login with Auth Key** action (see [Actions](#actions-startos-ui))
+to authenticate headlessly without a browser.
+
 ---
 
 ## Configuration Management
@@ -97,7 +100,7 @@ All Tailscale configuration is managed through the **Tailscale web interface**
 
 | Feature             | How to configure                          |
 | ------------------- | ----------------------------------------- |
-| Login / auth        | Web UI → Sign in                          |
+| Login / auth        | Web UI → Sign in, or **Get Started - Login** action |
 | Machine name        | Actions panel → Set Machine Name          |
 | Subnet router       | Web UI → Settings → Subnet router         |
 | Exit node           | Web UI → This device → Exit node          |
@@ -163,6 +166,36 @@ the new name.
   (~10 s) once Tailscale reflects the new `Self.DNSName`.
 - Re-running this action (rename) resets `hostnameSet` so the startup oneshot
   will reconfirm the name on the next start.
+
+### Get Started - Login
+
+Visible in the Actions panel. Works whether the service is running or stopped.
+
+Authenticates the node to your Tailscale network. On first install, an important
+task is automatically created prompting you to run this action.
+
+**Input:**
+
+| Field    | Required | Description |
+| -------- | -------- | ----------- |
+| Auth Key | No       | A `tskey-auth-...` key generated at <https://login.tailscale.com/admin/settings/keys>. Leave blank to authenticate via the web UI instead. |
+
+**What it does internally:**
+
+- If no auth key is provided, the action completes immediately — open the Web UI
+  to sign in interactively once the service is running.
+- If an auth key is provided:
+  1. Runs `tailscale login --auth-key=<key>` via the shared daemon socket.
+  2. Polls `tailscale status --json` (up to 30 seconds) until `BackendState === "Running"`.
+  3. Writes the node's Tailscale IP and MagicDNS name to `startos/status.json`,
+     which triggers the URL plugin to immediately export updated Tailscale URLs.
+
+**Key types and expiry:**
+
+Auth keys expire after 1–90 days (default 90). After expiry, the authenticated
+node remains connected until its node key expires (default 180 days). See the
+[Tailscale auth key docs](https://tailscale.com/docs/features/access-control/auth-keys)
+for details on reusable, ephemeral, pre-approved, and tagged keys.
 
 ### Add Serve / Remove Serve
 
@@ -313,4 +346,11 @@ actions:
   - id: remove-serve   # exposed via URL plugin table action
     description: Remove a tailscale serve for a service interface
     state: startos/store.json
+  - id: login   # visible in the Actions panel
+    description: Authenticate using a Tailscale auth key (headless login)
+    input: authKey (string, required) — tskey-auth-... from admin console
+    behavior: |
+      tailscale login --auth-key=<key>
+      poll BackendState until Running (30s timeout)
+      write ip + dnsName to startos/status.json (triggers URL plugin refresh)
 ```
