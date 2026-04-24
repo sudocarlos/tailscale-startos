@@ -146,14 +146,62 @@ export const main = sdk.setupMain(async ({ effects }) => {
             )
           }
 
-          const store = (await storeJson.read().once()) || {}
-          if (Object.keys(store).length > 0) {
-            await applyServicesConfig(subcontainer, store)
+          const storeData = (await storeJson.read().once()) ?? {
+            machineName: 'startos',
+            hostnameSet: false,
+            serves: {},
+          }
+          const serves = storeData.serves
+          if (Object.keys(serves).length > 0) {
+            await applyServicesConfig(subcontainer, serves)
           }
           return null
         },
       },
       requires: ['tailscaled'],
+    })
+    .addOneshot('set-hostname', {
+      subcontainer,
+      exec: {
+        fn: async () => {
+          // Apply the user-chosen machine name via `tailscale set --hostname`.
+          // We do this once per first-connect (hostnameSet === false) and skip
+          // on subsequent restarts to avoid overwriting admin-console renames.
+          // If the user re-runs the Set Machine Name action while stopped, it
+          // resets hostnameSet to false, causing this oneshot to re-apply.
+          const storeData = (await storeJson.read().once()) ?? {
+            machineName: 'startos',
+            hostnameSet: false,
+            serves: {},
+          }
+
+          if (storeData.hostnameSet) {
+            console.info('[set-hostname] hostname already set, skipping')
+            return null
+          }
+
+          const name = storeData.machineName ?? 'startos'
+          console.info(`[set-hostname] applying hostname: ${name}`)
+
+          const r = await subcontainer.exec([
+            'tailscale',
+            '--socket=' + SOCKET,
+            'set',
+            '--hostname=' + name,
+          ])
+
+          if (r.exitCode !== 0) {
+            throw new Error(
+              `[set-hostname] tailscale set --hostname failed: ${r.stderr.toString()}`,
+            )
+          }
+
+          await storeJson.write(effects, { ...storeData, hostnameSet: true })
+          console.info(`[set-hostname] hostname set to: ${name}`)
+          return null
+        },
+      },
+      requires: ['restore-serves'],
     })
     .addDaemon('tailscale-web', {
       subcontainer,
@@ -173,6 +221,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
             errorMessage: 'The web interface is not yet ready',
           }),
       },
-      requires: ['tailscaled', 'restore-serves'],
+      requires: ['tailscaled', 'set-hostname'],
     })
 })

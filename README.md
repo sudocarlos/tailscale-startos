@@ -64,7 +64,7 @@ temp containers can reach the tailscaled Unix socket):
 **Key files:**
 
 - `tailscale/tailscaled.state` — node identity, keys, and tailnet membership
-- `startos/store.json` — maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves
+- `startos/store.json` — top-level object containing `machineName` (the Tailscale hostname), `hostnameSet` (bool, true once applied), and `serves` (maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves)
 - `startos/status.json` — cached `{ ip, dnsName }` written on each successful health check
 
 All state persists across restarts. The node retains its Tailscale IP address as
@@ -75,14 +75,18 @@ long as `tailscaled.state` is intact.
 ## Installation and First-Run Flow
 
 1. Install Tailscale from the StartOS marketplace.
-2. Start the service. The two daemons start in sequence.
-3. Open the **Web Interface** from the StartOS UI.
-4. Log in with your Tailscale account to join the node to your tailnet.
-5. Optionally configure subnet routes, exit node, or Tailscale SSH from the web interface.
-6. Use the **Add Serve** tile action on any installed service to expose it on your tailnet.
+2. A critical task will appear prompting you to **Set Machine Name**. This is the
+   hostname your node will advertise on your Tailscale network. The default is
+   `startos`. Accept the default or enter a custom name, then complete the task.
+3. Start the service. The daemons start in sequence and the chosen machine name
+   is applied automatically via `tailscale set --hostname`.
+4. Open the **Web Interface** from the StartOS UI.
+5. Log in with your Tailscale account to join the node to your tailnet.
+6. Optionally configure subnet routes, exit node, or Tailscale SSH from the web interface.
+7. Use the **Add Serve** tile action on any installed service to expose it on your tailnet.
 
-No auth key or pre-configuration is required. All setup happens interactively
-through the Tailscale web interface.
+No auth key or pre-configuration is required beyond the machine name step.
+All other setup happens interactively through the Tailscale web interface.
 
 ---
 
@@ -94,6 +98,7 @@ All Tailscale configuration is managed through the **Tailscale web interface**
 | Feature             | How to configure                          |
 | ------------------- | ----------------------------------------- |
 | Login / auth        | Web UI → Sign in                          |
+| Machine name        | Actions panel → Set Machine Name          |
 | Subnet router       | Web UI → Settings → Subnet router         |
 | Exit node           | Web UI → This device → Exit node          |
 | Tailscale SSH       | Web UI → Settings → Tailscale SSH server  |
@@ -131,6 +136,23 @@ traffic is handled internally by tailscaled in userspace networking mode.
 ---
 
 ## Actions (StartOS UI)
+
+### Set Machine Name
+
+Visible in the Actions panel. Works whether the service is running or stopped.
+
+Sets the hostname this node advertises on your Tailscale network (and its MagicDNS name
+if MagicDNS is enabled). The default is `startos`.
+
+- **On install:** a critical task is automatically created, blocking startup until
+  the user runs this action and confirms or changes the name.
+- **While stopped:** stores the name; the `set-hostname` startup oneshot applies
+  it via `tailscale set --hostname` when the service next starts.
+- **While running:** stores the name and attempts immediate application via a
+  shared temp subcontainer. If the daemon is reachable the rename takes effect
+  instantly without a restart.
+- Re-running this action (rename) resets `hostnameSet` so the startup oneshot
+  will reconfirm the name on the next start.
 
 ### Add Serve / Remove Serve
 

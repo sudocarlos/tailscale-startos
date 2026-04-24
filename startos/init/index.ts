@@ -5,6 +5,7 @@ import { versionGraph } from '../versions'
 import { restoreInit } from '../backups'
 import { actions } from '../actions'
 import { registerUrlPlugin, exportUrls } from '../plugin/url'
+import { initializeService } from './initializeService'
 
 export const init = sdk.setupInit(
   restoreInit,
@@ -14,6 +15,7 @@ export const init = sdk.setupInit(
   actions,
   registerUrlPlugin,
   exportUrls,
+  initializeService,
 )
 
 export const uninit = sdk.setupUninit(versionGraph)

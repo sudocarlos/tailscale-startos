@@ -1,8 +1,8 @@
-import { z } from '@start9labs/start-sdk'
-import { shape, storeJson } from '../fileModels/store.json'
+import { servesShape, storeJson } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
 import { assignPort, isPortAvailable, BLOCKED_PORTS } from '../utils'
+import { z } from '@start9labs/start-sdk'
 
 const STATE_DIR = '/var/lib/tailscale'
 
@@ -54,10 +54,14 @@ export const addServe = sdk.Action.withInput(
       input.urlPluginMetadata
     const packageId = rawPkgId ?? 'startos'
     // Use .once() to avoid "write after const" error
-    const store: z.infer<typeof shape> =
-      (await storeJson.read().once()) || {}
+    const storeData = (await storeJson.read().once()) ?? {
+      machineName: 'startos',
+      hostnameSet: false,
+      serves: {},
+    }
+    const serves: z.infer<typeof servesShape> = storeData.serves
 
-    const existing = store[packageId]?.[interfaceId]
+    const existing = serves[packageId]?.[interfaceId]
 
     console.info(
       `[addServe] ${packageId}/${interfaceId} existing:`,
@@ -110,7 +114,7 @@ export const addServe = sdk.Action.withInput(
     if (existing !== undefined) {
       port = existing.port
     } else if (input.port !== null && input.port !== undefined) {
-      if (!isPortAvailable(store, input.port)) {
+      if (!isPortAvailable(serves, input.port)) {
         const blocked = [...BLOCKED_PORTS].join(', ')
         throw new Error(
           `Port ${input.port} is reserved or already in use. ` +
@@ -119,7 +123,7 @@ export const addServe = sdk.Action.withInput(
       }
       port = input.port
     } else {
-      port = assignPort(store)
+      port = assignPort(serves)
     }
 
     const entry = {
@@ -129,9 +133,9 @@ export const addServe = sdk.Action.withInput(
       internalPort: resolvedInternalPort,
     }
 
-    const updated: z.infer<typeof shape> = {
-      ...store,
-      [packageId]: { ...(store[packageId] ?? {}), [interfaceId]: entry },
+    const updatedServes: z.infer<typeof servesShape> = {
+      ...serves,
+      [packageId]: { ...(serves[packageId] ?? {}), [interfaceId]: entry },
     }
 
     const mounts = sdk.Mounts.of().mountVolume({
@@ -147,10 +151,10 @@ export const addServe = sdk.Action.withInput(
       mounts,
       'tailscale-serve-add',
       async (sub) => {
-        await applyServicesConfig(sub, updated)
+        await applyServicesConfig(sub, updatedServes)
       },
     )
 
-    await storeJson.write(effects, updated)
+    await storeJson.write(effects, { ...storeData, serves: updatedServes })
   },
 )

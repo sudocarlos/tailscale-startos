@@ -1,7 +1,7 @@
-import { z } from '@start9labs/start-sdk'
-import { shape, storeJson } from '../fileModels/store.json'
+import { servesShape, storeJson } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
+import { z } from '@start9labs/start-sdk'
 
 const STATE_DIR = '/var/lib/tailscale'
 
@@ -47,23 +47,27 @@ export const removeServe = sdk.Action.withInput(
     const packageId = rawPkgId ?? 'startos'
 
     // Use .once() to avoid "write after const" error
-    const store: z.infer<typeof shape> =
-      (await storeJson.read().once()) || {}
+    const storeData = (await storeJson.read().once()) ?? {
+      machineName: 'startos',
+      hostnameSet: false,
+      serves: {},
+    }
+    const serves: z.infer<typeof servesShape> = storeData.serves
 
-    if (store[packageId]?.[interfaceId] === undefined) {
+    if (serves[packageId]?.[interfaceId] === undefined) {
       return
     }
 
     // Remove the entry, preserving all other packages/interfaces
-    const updated: z.infer<typeof shape> = {}
-    for (const [pkg, ifaces] of Object.entries(store)) {
-      const filteredIfaces: z.infer<typeof shape>[string] = {}
+    const updatedServes: z.infer<typeof servesShape> = {}
+    for (const [pkg, ifaces] of Object.entries(serves)) {
+      const filteredIfaces: z.infer<typeof servesShape>[string] = {}
       for (const [iface, entry] of Object.entries(ifaces)) {
         if (pkg === packageId && iface === interfaceId) continue
         filteredIfaces[iface] = entry
       }
       if (Object.keys(filteredIfaces).length > 0) {
-        updated[pkg] = filteredIfaces
+        updatedServes[pkg] = filteredIfaces
       }
     }
 
@@ -80,10 +84,10 @@ export const removeServe = sdk.Action.withInput(
       mounts,
       'tailscale-serve-remove',
       async (sub) => {
-        await applyServicesConfig(sub, updated)
+        await applyServicesConfig(sub, updatedServes)
       },
     )
 
-    await storeJson.write(effects, updated)
+    await storeJson.write(effects, { ...storeData, serves: updatedServes })
   },
 )
