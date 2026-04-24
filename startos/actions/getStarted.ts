@@ -35,7 +35,7 @@ export const getStarted = sdk.Action.withInput(
       'Complete first-time setup. Provide a Tailscale auth key for headless login, ' +
       'or leave blank and open the Web UI to sign in interactively after the service starts.',
     warning: null,
-    allowedStatuses: 'only-running',
+    allowedStatuses: 'any',
     group: null,
     visibility: 'enabled',
   }),
