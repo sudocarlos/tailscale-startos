@@ -1,6 +1,6 @@
 import { sdk } from '../sdk'
 import { statusJson } from '../fileModels/status.json'
-import { parseTailscaleIp, parseDnsName } from '../utils'
+import { parseTailscaleIp } from '../utils'
 
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
@@ -16,7 +16,7 @@ const inputSpec = InputSpec.of({
       'A Tailscale auth key (tskey-auth-...). Generate one at https://login.tailscale.com/admin/settings/keys',
     required: true,
     default: null,
-    masked: false,
+    masked: true,
     placeholder: 'tskey-auth-...',
     warning: null,
   }),
@@ -58,13 +58,16 @@ export const login = sdk.Action.withInput(
       mounts,
       'tailscale-login',
       async (sub) => {
-        // Authenticate with the provided auth key
-        const loginResult = await sub.exec([
-          'tailscale',
-          '--socket=' + SOCKET,
-          'login',
-          '--auth-key=' + input.authKey,
-        ])
+        // Authenticate with the provided auth key via env var to avoid
+        // leaking the secret in process args / command logs.
+        const loginResult = await sub.exec(
+          [
+            'sh',
+            '-c',
+            'tailscale --socket="$TS_SOCKET" login --auth-key="$TS_AUTHKEY"',
+          ],
+          { env: { TS_SOCKET: SOCKET, TS_AUTHKEY: input.authKey } },
+        )
         if (loginResult.exitCode !== 0) {
           throw new Error(
             'tailscale login failed: ' +
@@ -107,12 +110,21 @@ export const login = sdk.Action.withInput(
                 'ip',
                 '-4',
               ])
-              if (ipResult.exitCode === 0) {
-                const ip = parseTailscaleIp(ipResult.stdout.toString())
-                const dnsName = parseDnsName(statusResult.stdout.toString())
-                await statusJson.write(effects, { ip, dnsName })
-                console.info(`[login] status.json updated: ip=${ip} dnsName=${dnsName}`)
+              if (ipResult.exitCode !== 0) {
+                throw new Error(
+                  'tailscale ip -4 failed after login reached Running: ' +
+                    (ipResult.stderr?.toString().trim() ||
+                      ipResult.stdout?.toString().trim() ||
+                      `exit code ${ipResult.exitCode}`),
+                )
               }
+              const ip = parseTailscaleIp(ipResult.stdout.toString())
+              // Derive DNS name from the already-parsed status JSON to avoid
+              // a redundant parse; strip the trailing dot Tailscale appends.
+              const rawDns = statusData.Self?.DNSName ?? ''
+              const dnsName = rawDns.endsWith('.') ? rawDns.slice(0, -1) : rawDns
+              await statusJson.write(effects, { ip, dnsName })
+              console.info(`[login] status.json updated: ip=${ip} dnsName=${dnsName}`)
               return
             }
           }
