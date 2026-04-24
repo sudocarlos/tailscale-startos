@@ -1,5 +1,5 @@
 import { z } from '@start9labs/start-sdk'
-import { shape } from './fileModels/store.json'
+import { servesShape } from './fileModels/store.json'
 import { UI_PORT } from './constants'
 
 /**
@@ -14,7 +14,7 @@ export const BLOCKED_PORTS = new Set([80, 443, UI_PORT])
  * Assigns the next available Tailscale serve port.
  * Starts at 10000, increments by 1 above the current max.
  */
-export function assignPort(store: z.infer<typeof shape>): number {
+export function assignPort(store: z.infer<typeof servesShape>): number {
   const allPorts = Object.values(store).flatMap((ifaces) =>
     Object.values(ifaces).map((e) => e.port),
   )
@@ -27,7 +27,7 @@ export function assignPort(store: z.infer<typeof shape>): number {
  * and any port already assigned to an existing serve entry.
  */
 export function isPortAvailable(
-  store: z.infer<typeof shape>,
+  store: z.infer<typeof servesShape>,
   port: number,
 ): boolean {
   if (BLOCKED_PORTS.has(port)) return false

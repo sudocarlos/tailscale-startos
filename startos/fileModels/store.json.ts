@@ -42,8 +42,8 @@ const legacySentinel = (port: number): StoreEntry => ({
   internalPort: 0,
 })
 
-// shape: { [packageId]: { [interfaceId]: StoreEntry } }
-export const shape = z.record(
+/** Shape of the serves sub-map: { [packageId]: { [interfaceId]: StoreEntry } } */
+export const servesShape = z.record(
   z.string(),
   z.record(
     z.string(),
@@ -68,6 +68,44 @@ export const shape = z.record(
     ]),
   ),
 )
+
+/**
+ * Top-level store shape.
+ *
+ * `machineName` — the Tailscale machine/hostname to advertise.  Defaults to
+ *   'startos' and is set by the user via the Set Machine Name action before
+ *   the service starts for the first time.
+ *
+ * `hostnameSet` — true once the startup oneshot has successfully applied
+ *   the machine name via `tailscale set --hostname`.  Prevents redundant
+ *   re-application on every restart after the initial set.
+ *
+ * `serves` — the per-package/interface serve port-mapping table (the entire
+ *   former top-level shape, now nested).
+ *
+ * A z.union is used to accept the legacy top-level serves format (from
+ * before the store was refactored) and migrate it transparently so that
+ * existing installs don't break on upgrade.
+ */
+const currentShape = z.object({
+  machineName: z.string().default('startos'),
+  hostnameSet: z.boolean().default(false),
+  serves: servesShape.default({}),
+})
+
+export const shape = z
+  .union([servesShape, currentShape])
+  .transform((value) =>
+    'serves' in value
+      ? (value as z.infer<typeof currentShape>)
+      : {
+          machineName: 'startos',
+          hostnameSet: false,
+          serves: value as z.infer<typeof servesShape>,
+        },
+  )
+
+export type Store = z.infer<typeof currentShape>
 
 export const storeJson = FileHelper.json(
   {

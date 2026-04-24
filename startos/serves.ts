@@ -1,5 +1,5 @@
 import { z } from '@start9labs/start-sdk'
-import { shape } from './fileModels/store.json'
+import { servesShape } from './fileModels/store.json'
 
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
@@ -29,7 +29,7 @@ export async function applyServicesConfig(
       cmd: string[],
     ) => Promise<{ exitCode: number | null; stderr: Buffer | string }>
   },
-  store: z.infer<typeof shape>,
+  store: z.infer<typeof servesShape>,
 ): Promise<void> {
   // Reset all existing serves first
   const resetResult = await sub.exec([
