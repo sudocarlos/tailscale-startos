@@ -24,6 +24,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'tailscale-sub',
   )
 
+  // Read any pending auth key saved by the Get Started action while the
+  // container was stopped.  If present it is passed to tailscaled as
+  // TS_AUTH_KEY so the node authenticates automatically on this start.
+  const initialStore = (await storeJson.read().once()) ?? {
+    machineName: 'startos',
+    hostnameSet: false,
+    serves: {},
+    authKey: null,
+  }
+  const pendingAuthKey = initialStore.authKey ?? null
+  if (pendingAuthKey) {
+    console.info('[main] Pending auth key found; will pass to tailscaled as TS_AUTH_KEY.')
+  }
+
   return sdk.Daemons.of(effects)
     .addDaemon('tailscaled', {
       subcontainer,
@@ -34,6 +48,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
           '--socket=' + SOCKET,
           '--tun=userspace-networking',
         ],
+        // Pass a stored auth key as TS_AUTH_KEY so tailscaled auto-authenticates
+        // without requiring an interactive `tailscale login` step.  The env map
+        // is omitted entirely when no key is pending to keep the env clean.
+        ...(pendingAuthKey ? { env: { TS_AUTH_KEY: pendingAuthKey } } : {}),
       },
       ready: {
         display: 'Tailscale Daemon',
@@ -67,16 +85,16 @@ export const main = sdk.setupMain(async ({ effects }) => {
           const backendState = statusData.BackendState ?? 'unknown'
           console.info(`[tailscaled] BackendState: ${backendState}`)
 
-          // Persist IP and DNS name once the node is fully connected.
-          // Only write when the values actually change. This ready check is
-          // polled continuously, and writing on every poll fires fs.watch
-          // events on status.json. Each event causes the SDK's FileHelper
-          // reactive `produce` loop to register a new abort listener on the
-          // parent AbortSignal of any active `.const()` read (notably the
-          // URL plugin's `setupExportedUrls` handler), eventually exceeding
-          // Node's default MaxListeners=10 and emitting a spurious warning.
-          // Skipping no-op writes eliminates the cause at the source.
           if (backendState === 'Running') {
+            // Persist IP and DNS name once the node is fully connected.
+            // Only write when the values actually change. This ready check is
+            // polled continuously, and writing on every poll fires fs.watch
+            // events on status.json. Each event causes the SDK's FileHelper
+            // reactive `produce` loop to register a new abort listener on the
+            // parent AbortSignal of any active `.const()` read (notably the
+            // URL plugin's `setupExportedUrls` handler), eventually exceeding
+            // Node's default MaxListeners=10 and emitting a spurious warning.
+            // Skipping no-op writes eliminates the cause at the source.
             try {
               const ipResult = await subcontainer.exec([
                 'tailscale',
@@ -94,6 +112,21 @@ export const main = sdk.setupMain(async ({ effects }) => {
               }
             } catch (e) {
               console.error('Failed to persist tailscale status:', e)
+            }
+
+            // Clear the pending auth key once the node is Running so it is not
+            // re-applied on subsequent restarts (the identity is already persisted
+            // in tailscaled.state).
+            if (pendingAuthKey) {
+              try {
+                const currentStore = (await storeJson.read().once()) ?? initialStore
+                if (currentStore.authKey) {
+                  await storeJson.write(effects, { ...currentStore, authKey: null })
+                  console.info('[main] Auth key consumed and cleared from store.json.')
+                }
+              } catch (e) {
+                console.error('[main] Failed to clear auth key from store.json:', e)
+              }
             }
           }
 
@@ -150,6 +183,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             machineName: 'startos',
             hostnameSet: false,
             serves: {},
+            authKey: null,
           }
           const serves = storeData.serves
           if (Object.keys(serves).length > 0) {
@@ -173,6 +207,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             machineName: 'startos',
             hostnameSet: false,
             serves: {},
+            authKey: null,
           }
 
           if (storeData.hostnameSet) {

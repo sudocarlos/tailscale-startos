@@ -11,6 +11,7 @@ export const initializeService = sdk.setupOnInit(async (effects, kind) => {
     machineName: 'startos',
     hostnameSet: false,
     serves: {},
+    authKey: null,
   })
 
   // Create a critical task that blocks the service from starting until the

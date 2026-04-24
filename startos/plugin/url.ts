@@ -15,6 +15,7 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
       machineName: 'startos',
       hostnameSet: false,
       serves: {},
+      authKey: null,
     }
     const status = await statusJson.read().const(effects)
     if (!status) return
