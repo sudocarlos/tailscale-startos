@@ -11,12 +11,19 @@ const inputSpec = InputSpec.of({
     name: 'Machine Name',
     description:
       'The name this node will advertise on your Tailscale network. ' +
-      'Must be lowercase letters, numbers, and hyphens only. ' +
+      'Must be 1–63 characters: lowercase letters, numbers, and hyphens only. ' +
+      'Cannot start or end with a hyphen. ' +
       'If MagicDNS is enabled, this also determines the MagicDNS hostname.',
     required: true,
     default: 'startos',
     placeholder: 'startos',
-    patterns: [],
+    patterns: [
+      {
+        regex: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$',
+        description:
+          'Lowercase letters, numbers, and hyphens only; cannot start or end with a hyphen.',
+      },
+    ],
     masked: false,
     minLength: 1,
     maxLength: 63,
@@ -50,7 +57,7 @@ export const setMachineName = sdk.Action.withInput(
 
   // execution
   async ({ effects, input }) => {
-    const machineName = input.machineName.trim()
+    const machineName = input.machineName.trim().toLowerCase()
 
     if (!machineName) {
       throw new Error('Machine name cannot be empty.')
@@ -98,9 +105,16 @@ export const setMachineName = sdk.Action.withInput(
           ])
 
           if (r.exitCode === 0) {
+            // Re-read the latest store to avoid overwriting concurrent writes
+            // (e.g. addServe/removeServe running between our two writes).
+            const latestStoreData = (await storeJson.read().once()) ?? {
+              machineName: 'startos',
+              hostnameSet: false,
+              serves: {},
+            }
             // Mark applied so the startup oneshot skips the redundant set.
             await storeJson.write(effects, {
-              ...storeData,
+              ...latestStoreData,
               machineName,
               hostnameSet: true,
             })

@@ -82,14 +82,30 @@ export const servesShape = z.record(
  *
  * `serves` — the per-package/interface serve port-mapping table (the entire
  *   former top-level shape, now nested).
+ *
+ * A z.union is used to accept the legacy top-level serves format (from
+ * before the store was refactored) and migrate it transparently so that
+ * existing installs don't break on upgrade.
  */
-export const shape = z.object({
+const currentShape = z.object({
   machineName: z.string().default('startos'),
   hostnameSet: z.boolean().default(false),
   serves: servesShape.default({}),
 })
 
-export type Store = z.infer<typeof shape>
+export const shape = z
+  .union([currentShape, servesShape])
+  .transform((value) =>
+    'serves' in value
+      ? (value as z.infer<typeof currentShape>)
+      : {
+          machineName: 'startos',
+          hostnameSet: false,
+          serves: value as z.infer<typeof servesShape>,
+        },
+  )
+
+export type Store = z.infer<typeof currentShape>
 
 export const storeJson = FileHelper.json(
   {
