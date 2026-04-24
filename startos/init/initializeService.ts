@@ -19,6 +19,8 @@ export const initializeService = sdk.setupOnInit(async (effects, kind) => {
   await sdk.action.createOwnTask(effects, setMachineName, 'critical', {
     reason:
       'Set your Tailscale machine name before starting the service. ' +
-      "The default is 'startos'. Accept the default or enter a custom name.",
+      "The default is 'startos'. Accept the default or enter a custom name. " +
+      'This only takes effect when "Auto-generate from OS hostname" is enabled ' +
+      '(the default) in the Tailscale admin console.',
   })
 })

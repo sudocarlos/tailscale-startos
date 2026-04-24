@@ -144,6 +144,12 @@ Visible in the Actions panel. Works whether the service is running or stopped.
 Sets the hostname this node advertises on your Tailscale network (and its MagicDNS name
 if MagicDNS is enabled). The default is `startos`.
 
+> **Note:** This action only has an effect when **"Auto-generate from OS hostname"** is
+> enabled in the [Tailscale admin console](https://login.tailscale.com/admin/machines)
+> — this is the default for new machines. If you have manually renamed this machine in
+> the admin console, the admin-console name takes precedence and this action will have
+> no visible effect until you re-enable auto-generation there.
+
 - **On install:** a critical task is automatically created, blocking startup until
   the user runs this action and confirms or changes the name.
 - **While stopped:** stores the name; the `set-hostname` startup oneshot applies

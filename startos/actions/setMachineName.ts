@@ -10,7 +10,9 @@ const inputSpec = InputSpec.of({
   machineName: Value.text({
     name: 'Machine Name',
     description:
-      'The name this node will advertise on your Tailscale network. ' +
+      'The hostname this node will advertise on your Tailscale network. ' +
+      'Only takes effect when "Auto-generate from OS hostname" is enabled ' +
+      '(the default) in the Tailscale admin console. ' +
       'Must be 1–63 characters: lowercase letters, numbers, and hyphens only. ' +
       'Cannot start or end with a hyphen. ' +
       'If MagicDNS is enabled, this also determines the MagicDNS hostname.',
@@ -38,9 +40,17 @@ export const setMachineName = sdk.Action.withInput(
   async () => ({
     name: 'Set Machine Name',
     description:
-      'Set the Tailscale machine name for this node. ' +
-      'This must be completed before the service can start for the first time.',
-    warning: null,
+      'Set the hostname this node advertises on your Tailscale network. ' +
+      'This only takes effect if "Auto-generate from OS hostname" is enabled ' +
+      '(the default) in the Tailscale admin console. If you have manually ' +
+      'renamed this machine in the admin console, that name takes precedence. ' +
+      'Must be completed before the service can start for the first time.',
+    warning:
+      'This action only controls the hostname sent to Tailscale via ' +
+      '`tailscale set --hostname`. If you have manually renamed this machine ' +
+      'in the Tailscale admin console, the admin-console name takes precedence ' +
+      'and this setting has no visible effect until you re-enable ' +
+      '"Auto-generate from OS hostname" in the admin console.',
     allowedStatuses: 'any',
     group: null,
     visibility: 'enabled',
