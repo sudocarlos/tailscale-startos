@@ -142,7 +142,9 @@ traffic is handled internally by tailscaled in userspace networking mode.
 Visible in the Actions panel. Works whether the service is running or stopped.
 
 Sets the hostname this node advertises on your Tailscale network (and its MagicDNS name
-if MagicDNS is enabled). The default is `startos`.
+if MagicDNS is enabled). The default is `startos`. All serve URLs
+(e.g. `mynode.tail1234.ts.net:10001`) update automatically once Tailscale confirms
+the new name.
 
 > **Note:** This action only has an effect when **"Auto-generate from OS hostname"** is
 > enabled in the [Tailscale admin console](https://login.tailscale.com/admin/machines)
@@ -153,10 +155,12 @@ if MagicDNS is enabled). The default is `startos`.
 - **On install:** a critical task is automatically created, blocking startup until
   the user runs this action and confirms or changes the name.
 - **While stopped:** stores the name; the `set-hostname` startup oneshot applies
-  it via `tailscale set --hostname` when the service next starts.
+  it via `tailscale set --hostname` when the service next starts. Serve URLs
+  update after the service starts and Tailscale confirms the new name.
 - **While running:** stores the name and attempts immediate application via a
   shared temp subcontainer. If the daemon is reachable the rename takes effect
-  instantly without a restart.
+  instantly without a restart; serve URLs update within one health-check cycle
+  (~10 s) once Tailscale reflects the new `Self.DNSName`.
 - Re-running this action (rename) resets `hostnameSet` so the startup oneshot
   will reconfirm the name on the next start.
 

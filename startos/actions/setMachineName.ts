@@ -41,6 +41,8 @@ export const setMachineName = sdk.Action.withInput(
     name: 'Set Machine Name',
     description:
       'Set the hostname this node advertises on your Tailscale network. ' +
+      'Serve URLs (e.g. mynode.tail1234.ts.net:10001) update automatically ' +
+      'once Tailscale confirms the new name. ' +
       'This only takes effect if "Auto-generate from OS hostname" is enabled ' +
       '(the default) in the Tailscale admin console. If you have manually ' +
       'renamed this machine in the admin console, that name takes precedence. ' +
