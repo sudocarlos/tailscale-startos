@@ -3,7 +3,7 @@ import { statusJson } from './fileModels/status.json'
 import { storeJson } from './fileModels/store.json'
 import { parseTailscaleIp, parseDnsName } from './utils'
 import { applyServicesConfig } from './serves'
-import { UI_PORT } from './constants'
+import { UI_PORT, FILEBROWSER_PORT } from './constants'
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
@@ -29,6 +29,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
     { imageId: 'tailscale', sharedRun: true },
     mounts,
     'tailscale-sub',
+  )
+
+  const fileBrowserMounts = sdk.Mounts.of().mountVolume({
+    volumeId: 'taildrop',
+    subpath: null,
+    mountpoint: '/taildrop',
+    readonly: true,
+  })
+
+  const fileBrowserSubcontainer = await sdk.SubContainer.of(
+    effects,
+    { imageId: 'filebrowser' },
+    fileBrowserMounts,
+    'filebrowser-sub',
   )
 
   // Read any pending auth key saved by the Get Started action while the
@@ -337,5 +351,27 @@ export const main = sdk.setupMain(async ({ effects }) => {
         gracePeriod: 10_000,
       },
       requires: ['set-hostname'],
+    })
+    .addDaemon('taildrop-files', {
+      subcontainer: fileBrowserSubcontainer,
+      exec: {
+        command: [
+          '/filebrowser',
+          '--noauth',
+          '--root=/taildrop',
+          '--address=0.0.0.0',
+          '--port=' + FILEBROWSER_PORT,
+          '--database=/dev/null',
+        ],
+      },
+      ready: {
+        display: 'Taildrop File Browser',
+        fn: () =>
+          sdk.healthCheck.checkPortListening(effects, FILEBROWSER_PORT, {
+            successMessage: 'The file browser is ready',
+            errorMessage: 'The file browser is not yet ready',
+          }),
+      },
+      requires: [],
     })
 })

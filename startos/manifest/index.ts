@@ -17,6 +17,10 @@ export const manifest = setupManifest({
       source: { dockerTag: 'ghcr.io/tailscale/tailscale:v1.96.5' },
       arch: ['x86_64', 'aarch64'],
     },
+    filebrowser: {
+      source: { dockerTag: 'filebrowser/filebrowser:v2.63.2' },
+      arch: ['x86_64', 'aarch64'],
+    },
   },
   dependencies: {},
   plugins: ['url-v0'],
