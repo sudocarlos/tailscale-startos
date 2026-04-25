@@ -25,8 +25,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
   )
 
   // Read any pending auth key saved by the Get Started action while the
-  // container was stopped.  If present it is passed to tailscaled as
-  // TS_AUTH_KEY so the node authenticates automatically on this start.
+  // container was stopped.  If present, it is applied via `tailscale login`
+  // once the daemon socket is ready and BackendState is NeedsLogin.
   const initialStore = (await storeJson.read().once()) ?? {
     machineName: 'startos',
     hostnameSet: false,
@@ -35,8 +35,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
   }
   const pendingAuthKey = initialStore.authKey ?? null
   if (pendingAuthKey) {
-    console.info('[main] Pending auth key found; will pass to tailscaled as TS_AUTH_KEY.')
+    console.info('[main] Pending auth key found; will apply via tailscale login once daemon is ready.')
   }
+
+  // Tracks whether we have already triggered the headless login for this
+  // start cycle so the ready-check poll doesn't re-run it on every tick.
+  let authKeyApplied = false
 
   return sdk.Daemons.of(effects)
     .addDaemon('tailscaled', {
@@ -48,10 +52,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
           '--socket=' + SOCKET,
           '--tun=userspace-networking',
         ],
-        // Pass a stored auth key as TS_AUTH_KEY so tailscaled auto-authenticates
-        // without requiring an interactive `tailscale login` step.  The env map
-        // is omitted entirely when no key is pending to keep the env clean.
-        ...(pendingAuthKey ? { env: { TS_AUTH_KEY: pendingAuthKey } } : {}),
       },
       ready: {
         display: 'Tailscale Daemon',
@@ -84,6 +84,31 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
           const backendState = statusData.BackendState ?? 'unknown'
           console.info(`[tailscaled] BackendState: ${backendState}`)
+
+          // Apply a pending auth key as soon as the daemon reaches NeedsLogin.
+          // Run only once per start cycle to avoid re-triggering on every poll.
+          if (pendingAuthKey && !authKeyApplied && backendState === 'NeedsLogin') {
+            authKeyApplied = true
+            console.info('[main] Applying pending auth key via tailscale login...')
+            try {
+              const loginResult = await subcontainer.exec(
+                ['sh', '-c', 'tailscale --socket="$TS_SOCKET" login --auth-key="$TS_AUTHKEY"'],
+                { env: { TS_SOCKET: SOCKET, TS_AUTHKEY: pendingAuthKey } },
+              )
+              if (loginResult.exitCode !== 0) {
+                console.error(
+                  '[main] tailscale login failed: ' +
+                    (loginResult.stderr?.toString().trim() ||
+                      loginResult.stdout?.toString().trim() ||
+                      `exit code ${loginResult.exitCode}`),
+                )
+              } else {
+                console.info('[main] tailscale login succeeded.')
+              }
+            } catch (e) {
+              console.error('[main] tailscale login threw:', e)
+            }
+          }
 
           if (backendState === 'Running') {
             // Persist IP and DNS name once the node is fully connected.
