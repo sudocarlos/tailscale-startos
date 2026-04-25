@@ -359,6 +359,23 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['set-hostname'],
     })
+    .addOneshot('chown-filebrowser-config', {
+      subcontainer: fileBrowserSubcontainer,
+      exec: {
+        fn: async () => {
+          console.info('[chown-filebrowser-config] fixing ownership of /config for uid/gid 1000')
+          const r = await fileBrowserSubcontainer.exec(['chown', '-R', '1000:1000', '/config'])
+          if (r.exitCode !== 0) {
+            throw new Error(
+              `[chown-filebrowser-config] chown failed: ${r.stderr?.toString().trim() || r.stdout?.toString().trim() || `exit code ${r.exitCode}`}`,
+            )
+          }
+          console.info('[chown-filebrowser-config] /config ownership fixed')
+          return null
+        },
+      },
+      requires: [],
+    })
     .addDaemon('taildrop-files', {
       subcontainer: fileBrowserSubcontainer,
       exec: {
@@ -370,7 +387,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
           '--port=' + FILEBROWSER_PORT,
           '--database=/config/filebrowser.db',
         ],
-        user: 'user',
       },
       ready: {
         display: 'Taildrop File Browser',
@@ -380,6 +396,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
             errorMessage: 'The file browser is not yet ready',
           }),
       },
-      requires: [],
+      requires: ['chown-filebrowser-config'],
     })
 })
