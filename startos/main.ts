@@ -10,12 +10,19 @@ const SOCKET = '/var/run/tailscale/tailscaled.sock'
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info('Starting Tailscale!')
 
-  const mounts = sdk.Mounts.of().mountVolume({
-    volumeId: 'tailscale',
-    subpath: null,
-    mountpoint: STATE_DIR,
-    readonly: false,
-  })
+  const mounts = sdk.Mounts.of()
+    .mountVolume({
+      volumeId: 'tailscale',
+      subpath: null,
+      mountpoint: STATE_DIR,
+      readonly: false,
+    })
+    .mountVolume({
+      volumeId: 'taildrop',
+      subpath: null,
+      mountpoint: '/taildrop',
+      readonly: false,
+    })
 
   const subcontainer = await sdk.SubContainer.of(
     effects,
@@ -283,5 +290,52 @@ export const main = sdk.setupMain(async ({ effects }) => {
           }),
       },
       requires: ['tailscaled', 'set-hostname'],
+    })
+    .addDaemon('taildrop-receive', {
+      subcontainer,
+      exec: {
+        command: [
+          'tailscale',
+          '--socket=' + SOCKET,
+          'file',
+          'get',
+          '--loop',
+          '/taildrop',
+        ],
+      },
+      ready: {
+        display: 'Taildrop Receive',
+        fn: async () => {
+          const result = await subcontainer.exec([
+            'tailscale',
+            '--socket=' + SOCKET,
+            'status',
+            '--json',
+          ])
+          if (result.exitCode !== 0) {
+            return {
+              result: 'loading',
+              message: 'Waiting for Tailscale daemon...',
+            }
+          }
+          let statusData: { BackendState?: string } = {}
+          try {
+            statusData = JSON.parse(result.stdout.toString().trim())
+          } catch {}
+          const backendState = statusData.BackendState ?? 'unknown'
+          if (backendState !== 'Running') {
+            return {
+              result: 'loading',
+              message: `Waiting for Tailscale to connect (${backendState})...`,
+            }
+          }
+          return {
+            result: 'success',
+            message: 'Ready to receive files via Taildrop',
+          }
+        },
+        gracePeriod: 10_000,
+      },
+      requires: ['set-hostname'],
     })
 })
