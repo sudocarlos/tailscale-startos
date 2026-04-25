@@ -36,6 +36,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const pendingAuthKey = initialStore.authKey ?? null
   if (pendingAuthKey) {
     console.info('[main] Pending auth key found; will apply via tailscale login once daemon is ready.')
+  } else {
+    console.info('[main] No pending auth key in store.')
   }
 
   // Tracks whether we have already triggered the headless login for this
@@ -170,16 +172,18 @@ export const main = sdk.setupMain(async ({ effects }) => {
       subcontainer,
       exec: {
         fn: async () => {
-          // The tailscaled ready check returns as soon as the socket is alive
-          // (BackendState may still be NoState/Starting) so the web UI can
-          // unblock for fresh installs in NeedsLogin. Serve commands, however,
-          // require a populated netMap — issuing `tailscale serve reset`
-          // before the control-plane handshake completes fails with
-          // "netMap is nil". Poll BackendState here so the restore is silent.
+          // Serve commands require a populated netMap.  `tailscale serve reset`
+          // fails with "netMap is nil" for any BackendState other than Running
+          // (including NeedsLogin, which has no control-plane connection yet).
+          // Poll until Running or timeout — if we never reach Running (e.g.
+          // fresh install still waiting for auth), skip the restore entirely;
+          // the serves will be reapplied on the next start once the node is
+          // connected.
           const POLL_INTERVAL_MS = 500
-          const POLL_TIMEOUT_MS = 30_000
+          const POLL_TIMEOUT_MS = 10_000
           const deadline = Date.now() + POLL_TIMEOUT_MS
 
+          let reachedRunning = false
           while (Date.now() < deadline) {
             const r = await subcontainer.exec([
               'tailscale',
@@ -193,15 +197,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
                 st = JSON.parse(r.stdout.toString())
               } catch {}
               const state = st.BackendState ?? ''
-              if (state !== '' && state !== 'NoState' && state !== 'Starting') break
+              if (state === 'Running') {
+                reachedRunning = true
+                break
+              }
             }
             await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
           }
 
-          if (Date.now() >= deadline) {
-            console.warn(
-              '[restore-serves] timed out waiting for tailscaled BackendState; proceeding anyway',
+          if (!reachedRunning) {
+            console.info(
+              '[restore-serves] BackendState never reached Running within timeout ' +
+              '(node may need login); skipping serve restore — will retry on next start',
             )
+            return null
           }
 
           const storeData = (await storeJson.read().once()) ?? {
@@ -223,21 +232,14 @@ export const main = sdk.setupMain(async ({ effects }) => {
       subcontainer,
       exec: {
         fn: async () => {
-          // Apply the user-chosen machine name via `tailscale set --hostname`.
-          // We do this once per first-connect (hostnameSet === false) and skip
-          // on subsequent restarts to avoid overwriting admin-console renames.
-          // If the user re-runs the Set Machine Name action while stopped, it
-          // resets hostnameSet to false, causing this oneshot to re-apply.
+          // Always apply the user-chosen machine name via `tailscale set --hostname`
+          // on every start.  The stored machineName is the source of truth; Tailscale
+          // appends "-1"/"-N" automatically if the name conflicts with another node.
           const storeData = (await storeJson.read().once()) ?? {
             machineName: 'startos',
             hostnameSet: false,
             serves: {},
             authKey: null,
-          }
-
-          if (storeData.hostnameSet) {
-            console.info('[set-hostname] hostname already set, skipping')
-            return null
           }
 
           const name = storeData.machineName ?? 'startos'
@@ -256,7 +258,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
             )
           }
 
-          await storeJson.write(effects, { ...storeData, hostnameSet: true })
           console.info(`[set-hostname] hostname set to: ${name}`)
           return null
         },

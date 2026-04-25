@@ -10,7 +10,7 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const ui = sdk.createInterface(effects, {
     name: 'Web Interface',
     id: 'ui',
-    description: 'Manage your Tailscale node — login, subnet routes, exit node, and SSH',
+    description: 'Manage your Tailscale machine — login, subnet routes, exit node, and SSH',
     type: 'ui',
     masked: false,
     schemeOverride: null,
