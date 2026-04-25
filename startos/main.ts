@@ -172,16 +172,18 @@ export const main = sdk.setupMain(async ({ effects }) => {
       subcontainer,
       exec: {
         fn: async () => {
-          // The tailscaled ready check returns as soon as the socket is alive
-          // (BackendState may still be NoState/Starting) so the web UI can
-          // unblock for fresh installs in NeedsLogin. Serve commands, however,
-          // require a populated netMap — issuing `tailscale serve reset`
-          // before the control-plane handshake completes fails with
-          // "netMap is nil". Poll BackendState here so the restore is silent.
+          // Serve commands require a populated netMap.  `tailscale serve reset`
+          // fails with "netMap is nil" for any BackendState other than Running
+          // (including NeedsLogin, which has no control-plane connection yet).
+          // Poll until Running or timeout — if we never reach Running (e.g.
+          // fresh install still waiting for auth), skip the restore entirely;
+          // the serves will be reapplied on the next start once the node is
+          // connected.
           const POLL_INTERVAL_MS = 500
           const POLL_TIMEOUT_MS = 30_000
           const deadline = Date.now() + POLL_TIMEOUT_MS
 
+          let reachedRunning = false
           while (Date.now() < deadline) {
             const r = await subcontainer.exec([
               'tailscale',
@@ -195,15 +197,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
                 st = JSON.parse(r.stdout.toString())
               } catch {}
               const state = st.BackendState ?? ''
-              if (state !== '' && state !== 'NoState' && state !== 'Starting') break
+              if (state === 'Running') {
+                reachedRunning = true
+                break
+              }
             }
             await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
           }
 
-          if (Date.now() >= deadline) {
-            console.warn(
-              '[restore-serves] timed out waiting for tailscaled BackendState; proceeding anyway',
+          if (!reachedRunning) {
+            console.info(
+              '[restore-serves] BackendState never reached Running within timeout ' +
+              '(node may need login); skipping serve restore — will retry on next start',
             )
+            return null
           }
 
           const storeData = (await storeJson.read().once()) ?? {
