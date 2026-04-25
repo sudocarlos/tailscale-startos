@@ -39,17 +39,10 @@ export const setMachineName = sdk.Action.withInput(
   // metadata
   async () => ({
     name: 'Set Machine Name',
-    description:
-      'Set the hostname this node advertises on your Tailscale network. ' +
-      'The name is re-applied on every restart. ' +
-      'This only takes effect if "Auto-generate from OS hostname" is enabled ' +
-      '(the default) in the Tailscale admin console.',
+    description: 'Set the Tailscale machine name.',
     warning:
-      'This action only controls the hostname sent to Tailscale via ' +
-      '`tailscale set --hostname`. If you have manually renamed this machine ' +
-      'in the Tailscale admin console, the admin-console name takes precedence ' +
-      'and this setting has no visible effect until you re-enable ' +
-      '"Auto-generate from OS hostname" in the admin console.',
+      '"Auto-generate from OS hostname" must be enabled in the Tailscale ' +
+      'admin console: https://login.tailscale.com/admin/machines',
     allowedStatuses: 'any',
     group: null,
     visibility: 'enabled',
