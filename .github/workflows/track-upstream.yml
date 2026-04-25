@@ -1,0 +1,157 @@
+name: Track Upstream Stable Release
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  track:
+    name: Check tailscale:stable tag
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Detect new stable version and open issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const https = require('https');
+
+            function get(url, headers = {}) {
+              return new Promise((resolve, reject) => {
+                https.get(url, { headers }, (res) => {
+                  let data = '';
+                  res.on('data', chunk => data += chunk);
+                  res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+                }).on('error', reject);
+              });
+            }
+
+            function head(url, headers = {}) {
+              return new Promise((resolve, reject) => {
+                const opts = { method: 'HEAD', headers, ...require('url').parse(url) };
+                https.request(opts, (res) => {
+                  res.resume();
+                  resolve({ status: res.statusCode, headers: res.headers });
+                }).on('error', reject).end();
+              });
+            }
+
+            // 1. Obtain anonymous GHCR token
+            const tokenRes = await get(
+              'https://ghcr.io/token?scope=repository:tailscale/tailscale:pull&service=ghcr.io'
+            );
+            const { token } = JSON.parse(tokenRes.body);
+            const authHeader = `Bearer ${token}`;
+            const manifestAccept = [
+              'application/vnd.oci.image.index.v1+json',
+              'application/vnd.docker.distribution.manifest.list.v2+json',
+            ].join(',');
+
+            // 2. Get the digest of the current "stable" tag
+            const stableHead = await head(
+              'https://ghcr.io/v2/tailscale/tailscale/manifests/stable',
+              { Authorization: authHeader, Accept: manifestAccept }
+            );
+            const stableDigest = stableHead.headers['docker-content-digest'];
+            if (!stableDigest) {
+              core.setFailed('Could not retrieve digest for tailscale:stable');
+              return;
+            }
+            core.info(`stable digest: ${stableDigest}`);
+
+            // 3. Fetch full tag list (paginated) and find the versioned tag sharing the same digest
+            let allTags = [];
+            let tagsUrl = 'https://ghcr.io/v2/tailscale/tailscale/tags/list';
+            while (tagsUrl) {
+              const tagsRes = await get(tagsUrl, { Authorization: authHeader });
+              const { tags } = JSON.parse(tagsRes.body);
+              allTags = allTags.concat(tags);
+              const link = tagsRes.headers['link'];
+              if (link) {
+                const match = link.match(/<([^>]+)>;\s*rel="next"/);
+                if (match) {
+                  const rel = match[1];
+                  tagsUrl = rel.startsWith('http') ? rel : `https://ghcr.io${rel}`;
+                } else {
+                  tagsUrl = null;
+                }
+              } else {
+                tagsUrl = null;
+              }
+            }
+            const versionTags = allTags
+              .filter(t => /^v\d+\.\d+\.\d+$/.test(t))
+              .sort((a, b) => {
+                const pa = a.slice(1).split('.').map(Number);
+                const pb = b.slice(1).split('.').map(Number);
+                for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pb[i] - pa[i];
+                return 0;
+              });
+            core.info(`Checking ${versionTags.length} versioned tags, starting from ${versionTags[0]}…`);
+
+            let stableVersion = null;
+            for (const tag of versionTags) {  // newest first
+              const res = await head(
+                `https://ghcr.io/v2/tailscale/tailscale/manifests/${tag}`,
+                { Authorization: authHeader, Accept: manifestAccept }
+              );
+              if (res.headers['docker-content-digest'] === stableDigest) {
+                stableVersion = tag;
+                break;
+              }
+            }
+
+            if (!stableVersion) {
+              core.setFailed('Could not match stable digest to any versioned tag');
+              return;
+            }
+            core.info(`stable version resolved to: ${stableVersion}`);
+
+            // 4. Check if an issue already exists for this version
+            const issueTitle = `Upstream: tailscale/tailscale:stable → ${stableVersion}`;
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              labels: 'upstream',
+              per_page: 100,
+            });
+            const alreadyTracked = existing.some(i => i.title === issueTitle);
+            if (alreadyTracked) {
+              core.info(`Issue already exists for ${stableVersion}, nothing to do.`);
+              return;
+            }
+
+            // 5. Create the issue
+            const body = [
+              `A new stable release of **tailscale/tailscale** has been published.`,
+              ``,
+              `| Field | Value |`,
+              `|-------|-------|`,
+              `| Version | \`${stableVersion}\` |`,
+              `| GHCR tag | \`ghcr.io/tailscale/tailscale:stable\` |`,
+              `| Digest | \`${stableDigest}\` |`,
+              ``,
+              `### Links`,
+              ``,
+              `- [GHCR package](https://github.com/tailscale/tailscale/pkgs/container/tailscale)`,
+              `- [GitHub Release](https://github.com/tailscale/tailscale/releases/tag/${stableVersion})`,
+              `- [Changelog](https://tailscale.com/changelog)`,
+              ``,
+              `### Action required`,
+              ``,
+              `Update the package version in this repository to \`${stableVersion}\` and rebuild the \`.s9pk\`.`,
+            ].join('\n');
+
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: issueTitle,
+              body,
+              labels: ['upstream'],
+            });
+            core.info(`Created issue #${issue.number}: ${issue.html_url}`);
