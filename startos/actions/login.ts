@@ -95,18 +95,28 @@ export const getStarted = sdk.Action.withInput(
             { env: { TS_SOCKET: SOCKET, TS_AUTHKEY: authKey } },
           )
           if (loginResult.exitCode !== 0) {
-            // The key was rejected — clear it from the store so it is not
-            // retried on every subsequent restart.
-            try {
-              const s = (await storeJson.read().once()) ?? { ...storeData, authKey }
-              await storeJson.write(effects, { ...s, authKey: null })
-            } catch {}
-            throw new Error(
-              'tailscale login failed: ' +
-                (loginResult.stderr?.toString().trim() ||
-                  loginResult.stdout?.toString().trim() ||
-                  `exit code ${loginResult.exitCode}`),
-            )
+            // The key was rejected by tailscale (not a socket/connectivity
+            // error, which is caught by the outer catch).  Clear it from the
+            // store so it is not retried on every subsequent restart.
+            const errText =
+              loginResult.stderr?.toString().trim() ||
+              loginResult.stdout?.toString().trim() ||
+              `exit code ${loginResult.exitCode}`
+            // Don't clear the key for transient / socket-unavailable errors —
+            // the outer catch handles those and we want to retry on next start.
+            const isTransient =
+              errText.includes('no such file') ||
+              errText.includes('ENOENT') ||
+              errText.includes('ECONNREFUSED') ||
+              errText.includes('connect') ||
+              errText.includes('socket')
+            if (!isTransient) {
+              try {
+                const s = (await storeJson.read().once()) ?? { ...storeData, authKey }
+                await storeJson.write(effects, { ...s, authKey: null })
+              } catch {}
+            }
+            throw new Error('tailscale login failed: ' + errText)
           }
 
           const deadline = Date.now() + POLL_TIMEOUT_MS

@@ -36,6 +36,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const pendingAuthKey = initialStore.authKey ?? null
   if (pendingAuthKey) {
     console.info('[main] Pending auth key found; will apply via tailscale login once daemon is ready.')
+  } else {
+    console.info('[main] No pending auth key in store.')
   }
 
   // Tracks whether we have already triggered the headless login for this
