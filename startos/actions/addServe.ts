@@ -69,11 +69,11 @@ export const addServe = sdk.Action.withInput(
       JSON.stringify(existing ?? null),
     )
 
-    // Fully configured entry — nothing to do
-    if (existing !== undefined && existing.hostId !== '') {
-      console.info(`[addServe] ${packageId}/${interfaceId} already configured — skipping`)
-      return
-    }
+    // No early-return for already-configured entries — re-running add-serve
+    // always re-applies the serve so that entries lost (e.g. after
+    // uninstall/reinstall or manual `tailscale serve reset`) are restored.
+    // The port is preserved from the existing entry unless the user supplies
+    // a new one.
 
     // Resolve scheme and internal port from the service interface.
     // StarOS itself has no registered service interface; its UI is always
@@ -108,14 +108,19 @@ export const addServe = sdk.Action.withInput(
     )
 
     // Determine tailnet port:
-    //   1. Legacy-upgrade: reuse the existing stored port.
-    //   2. User supplied a port: validate it, then use it.
-    //   3. Blank: auto-assign the next sequential port.
+    //   1. User supplied a port: validate it, then use it (even for existing entries).
+    //   2. Existing fully-configured entry and no port supplied: preserve stored port.
+    //   3. Legacy entry (hostId === '') or new entry, no port: auto-assign.
     let port: number
-    if (existing !== undefined) {
-      port = existing.port
-    } else if (input.port !== null && input.port !== undefined) {
-      if (!isPortAvailable(serves, input.port)) {
+    if (input.port !== null && input.port !== undefined) {
+      // Exclude the existing entry's own port from the "in use" check so the
+      // user can re-submit without being blocked by their own port.
+      const servesWithoutThis = {
+        ...serves,
+        [packageId]: { ...(serves[packageId] ?? {}) },
+      }
+      delete servesWithoutThis[packageId][interfaceId]
+      if (!isPortAvailable(servesWithoutThis, input.port)) {
         const blocked = [...BLOCKED_PORTS].join(', ')
         throw new Error(
           `Port ${input.port} is reserved or already in use. ` +
@@ -123,6 +128,9 @@ export const addServe = sdk.Action.withInput(
         )
       }
       port = input.port
+    } else if (existing !== undefined && existing.hostId !== '') {
+      // Preserve the stored port for fully-configured existing entries.
+      port = existing.port
     } else {
       port = assignPort(serves)
     }

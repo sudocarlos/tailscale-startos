@@ -223,21 +223,14 @@ export const main = sdk.setupMain(async ({ effects }) => {
       subcontainer,
       exec: {
         fn: async () => {
-          // Apply the user-chosen machine name via `tailscale set --hostname`.
-          // We do this once per first-connect (hostnameSet === false) and skip
-          // on subsequent restarts to avoid overwriting admin-console renames.
-          // If the user re-runs the Set Machine Name action while stopped, it
-          // resets hostnameSet to false, causing this oneshot to re-apply.
+          // Always apply the user-chosen machine name via `tailscale set --hostname`
+          // on every start.  The stored machineName is the source of truth; Tailscale
+          // appends "-1"/"-N" automatically if the name conflicts with another node.
           const storeData = (await storeJson.read().once()) ?? {
             machineName: 'startos',
             hostnameSet: false,
             serves: {},
             authKey: null,
-          }
-
-          if (storeData.hostnameSet) {
-            console.info('[set-hostname] hostname already set, skipping')
-            return null
           }
 
           const name = storeData.machineName ?? 'startos'
@@ -256,7 +249,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
             )
           }
 
-          await storeJson.write(effects, { ...storeData, hostnameSet: true })
           console.info(`[set-hostname] hostname set to: ${name}`)
           return null
         },

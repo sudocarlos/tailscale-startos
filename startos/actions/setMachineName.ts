@@ -41,12 +41,9 @@ export const setMachineName = sdk.Action.withInput(
     name: 'Set Machine Name',
     description:
       'Set the hostname this node advertises on your Tailscale network. ' +
-      'Serve URLs (e.g. mynode.tail1234.ts.net:10001) update automatically ' +
-      'once Tailscale confirms the new name. ' +
+      'The name is re-applied on every restart. ' +
       'This only takes effect if "Auto-generate from OS hostname" is enabled ' +
-      '(the default) in the Tailscale admin console. If you have manually ' +
-      'renamed this machine in the admin console, that name takes precedence. ' +
-      'Must be completed before the service can start for the first time.',
+      '(the default) in the Tailscale admin console.',
     warning:
       'This action only controls the hostname sent to Tailscale via ' +
       '`tailscale set --hostname`. If you have manually renamed this machine ' +
@@ -75,9 +72,8 @@ export const setMachineName = sdk.Action.withInput(
       throw new Error('Machine name cannot be empty.')
     }
 
-    // Persist the chosen name and reset hostnameSet so the startup oneshot
-    // re-applies the name on the next start (handles both first-install and
-    // subsequent rename-while-stopped flows).
+    // Persist the chosen name — the set-hostname startup oneshot always
+    // re-applies it on every restart, so no hostnameSet flag is needed.
     const storeData = (await storeJson.read().once()) ?? {
       machineName: 'startos',
       hostnameSet: false,
@@ -88,14 +84,10 @@ export const setMachineName = sdk.Action.withInput(
     await storeJson.write(effects, {
       ...storeData,
       machineName,
-      hostnameSet: false,
     })
 
     // If the service is currently running, apply the rename immediately via a
     // shared temp subcontainer so the change takes effect without a restart.
-    // If the daemon isn't running yet (e.g. first-install, service stopped),
-    // the write above is enough — the set-hostname oneshot picks it up on
-    // the next start.
     try {
       const mounts = sdk.Mounts.of().mountVolume({
         volumeId: 'tailscale',
@@ -118,23 +110,8 @@ export const setMachineName = sdk.Action.withInput(
           ])
 
           if (r.exitCode === 0) {
-            // Re-read the latest store to avoid overwriting concurrent writes
-            // (e.g. addServe/removeServe running between our two writes).
-            const latestStoreData = (await storeJson.read().once()) ?? {
-              machineName: 'startos',
-              hostnameSet: false,
-              serves: {},
-              authKey: null,
-            }
-            // Mark applied so the startup oneshot skips the redundant set.
-            await storeJson.write(effects, {
-              ...latestStoreData,
-              machineName,
-              hostnameSet: true,
-            })
             console.info(`[set-machine-name] applied immediately: ${machineName}`)
           } else {
-            // Daemon not running — startup oneshot will apply on next start.
             console.info(
               `[set-machine-name] daemon not running (exit ${r.exitCode}), ` +
               `name saved to store; will apply on next start`,
@@ -143,7 +120,6 @@ export const setMachineName = sdk.Action.withInput(
         },
       )
     } catch (e) {
-      // Any error here means the daemon isn't running; startup oneshot handles it.
       console.info(
         '[set-machine-name] could not reach running daemon, name will be applied on next start:',
         e,
