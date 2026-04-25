@@ -31,12 +31,19 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'tailscale-sub',
   )
 
-  const fileBrowserMounts = sdk.Mounts.of().mountVolume({
-    volumeId: 'taildrop',
-    subpath: null,
-    mountpoint: '/taildrop',
-    readonly: true,
-  })
+  const fileBrowserMounts = sdk.Mounts.of()
+    .mountVolume({
+      volumeId: 'taildrop',
+      subpath: null,
+      mountpoint: '/taildrop',
+      readonly: true,
+    })
+    .mountVolume({
+      volumeId: 'startos',
+      subpath: 'filebrowser',
+      mountpoint: '/config',
+      readonly: false,
+    })
 
   const fileBrowserSubcontainer = await sdk.SubContainer.of(
     effects,
@@ -356,12 +363,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
       subcontainer: fileBrowserSubcontainer,
       exec: {
         command: [
-          '/filebrowser',
+          '/bin/filebrowser',
           '--noauth',
           '--root=/taildrop',
           '--address=0.0.0.0',
           '--port=' + FILEBROWSER_PORT,
-          '--database=/dev/null',
+          '--database=/config/filebrowser.db',
         ],
       },
       ready: {
