@@ -82,6 +82,7 @@ export const setMachineName = sdk.Action.withInput(
       machineName: 'startos',
       hostnameSet: false,
       serves: {},
+      authKey: null,
     }
 
     await storeJson.write(effects, {
@@ -123,6 +124,7 @@ export const setMachineName = sdk.Action.withInput(
               machineName: 'startos',
               hostnameSet: false,
               serves: {},
+              authKey: null,
             }
             // Mark applied so the startup oneshot skips the redundant set.
             await storeJson.write(effects, {

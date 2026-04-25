@@ -4,7 +4,7 @@ import { setInterfaces } from '../interfaces'
 import { versionGraph } from '../versions'
 import { restoreInit } from '../backups'
 import { actions } from '../actions'
-import { getStarted } from '../actions/getStarted'
+import { getStarted } from '../actions/login'
 import { registerUrlPlugin, exportUrls } from '../plugin/url'
 import { initializeService } from './initializeService'
 import type { Effects } from '@start9labs/start-sdk/base/lib/types'
@@ -17,7 +17,8 @@ async function scheduleGetStarted(
   await sdk.action.createOwnTask(effects, getStarted, 'important', {
     reason:
       'Authenticate Tailscale: provide an auth key for headless login, ' +
-      'or open the Web UI to sign in interactively.',
+      'or open the Web UI to sign in interactively. ' +
+      'Generate an auth key at https://login.tailscale.com/admin/settings/keys',
     replayId: 'get-started-first-launch',
   })
 }

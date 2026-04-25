@@ -1,6 +1,6 @@
 import { sdk } from '../sdk'
 import { addServe } from './addServe'
-import { getStarted } from './getStarted'
+import { getStarted } from './login'
 import { removeServe } from './removeServe'
 import { setMachineName } from './setMachineName'
 

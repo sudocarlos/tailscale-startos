@@ -24,6 +24,24 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'tailscale-sub',
   )
 
+  // Read any pending auth key saved by the Get Started action while the
+  // container was stopped.  If present, it is applied via `tailscale login`
+  // once the daemon socket is ready and BackendState is NeedsLogin.
+  const initialStore = (await storeJson.read().once()) ?? {
+    machineName: 'startos',
+    hostnameSet: false,
+    serves: {},
+    authKey: null,
+  }
+  const pendingAuthKey = initialStore.authKey ?? null
+  if (pendingAuthKey) {
+    console.info('[main] Pending auth key found; will apply via tailscale login once daemon is ready.')
+  }
+
+  // Tracks whether we have already triggered the headless login for this
+  // start cycle so the ready-check poll doesn't re-run it on every tick.
+  let authKeyApplied = false
+
   return sdk.Daemons.of(effects)
     .addDaemon('tailscaled', {
       subcontainer,
@@ -67,16 +85,41 @@ export const main = sdk.setupMain(async ({ effects }) => {
           const backendState = statusData.BackendState ?? 'unknown'
           console.info(`[tailscaled] BackendState: ${backendState}`)
 
-          // Persist IP and DNS name once the node is fully connected.
-          // Only write when the values actually change. This ready check is
-          // polled continuously, and writing on every poll fires fs.watch
-          // events on status.json. Each event causes the SDK's FileHelper
-          // reactive `produce` loop to register a new abort listener on the
-          // parent AbortSignal of any active `.const()` read (notably the
-          // URL plugin's `setupExportedUrls` handler), eventually exceeding
-          // Node's default MaxListeners=10 and emitting a spurious warning.
-          // Skipping no-op writes eliminates the cause at the source.
+          // Apply a pending auth key as soon as the daemon reaches NeedsLogin.
+          // Run only once per start cycle to avoid re-triggering on every poll.
+          if (pendingAuthKey && !authKeyApplied && backendState === 'NeedsLogin') {
+            authKeyApplied = true
+            console.info('[main] Applying pending auth key via tailscale login...')
+            try {
+              const loginResult = await subcontainer.exec(
+                ['sh', '-c', 'tailscale --socket="$TS_SOCKET" login --auth-key="$TS_AUTHKEY"'],
+                { env: { TS_SOCKET: SOCKET, TS_AUTHKEY: pendingAuthKey } },
+              )
+              if (loginResult.exitCode !== 0) {
+                console.error(
+                  '[main] tailscale login failed: ' +
+                    (loginResult.stderr?.toString().trim() ||
+                      loginResult.stdout?.toString().trim() ||
+                      `exit code ${loginResult.exitCode}`),
+                )
+              } else {
+                console.info('[main] tailscale login succeeded.')
+              }
+            } catch (e) {
+              console.error('[main] tailscale login threw:', e)
+            }
+          }
+
           if (backendState === 'Running') {
+            // Persist IP and DNS name once the node is fully connected.
+            // Only write when the values actually change. This ready check is
+            // polled continuously, and writing on every poll fires fs.watch
+            // events on status.json. Each event causes the SDK's FileHelper
+            // reactive `produce` loop to register a new abort listener on the
+            // parent AbortSignal of any active `.const()` read (notably the
+            // URL plugin's `setupExportedUrls` handler), eventually exceeding
+            // Node's default MaxListeners=10 and emitting a spurious warning.
+            // Skipping no-op writes eliminates the cause at the source.
             try {
               const ipResult = await subcontainer.exec([
                 'tailscale',
@@ -94,6 +137,21 @@ export const main = sdk.setupMain(async ({ effects }) => {
               }
             } catch (e) {
               console.error('Failed to persist tailscale status:', e)
+            }
+
+            // Clear any persisted auth key once the node is Running so it is not
+            // re-applied on subsequent restarts (the identity is already persisted
+            // in tailscaled.state). Check the current store value rather than
+            // pendingAuthKey so keys written by the login action while the service
+            // was already running are also cleared.
+            try {
+              const currentStore = (await storeJson.read().once()) ?? initialStore
+              if (currentStore.authKey) {
+                await storeJson.write(effects, { ...currentStore, authKey: null })
+                console.info('[main] Auth key consumed and cleared from store.json.')
+              }
+            } catch (e) {
+              console.error('[main] Failed to clear auth key from store.json:', e)
             }
           }
 
@@ -150,6 +208,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             machineName: 'startos',
             hostnameSet: false,
             serves: {},
+            authKey: null,
           }
           const serves = storeData.serves
           if (Object.keys(serves).length > 0) {
@@ -173,6 +232,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             machineName: 'startos',
             hostnameSet: false,
             serves: {},
+            authKey: null,
           }
 
           if (storeData.hostnameSet) {

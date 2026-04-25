@@ -51,6 +51,7 @@ export const removeServe = sdk.Action.withInput(
       machineName: 'startos',
       hostnameSet: false,
       serves: {},
+      authKey: null,
     }
     const serves: z.infer<typeof servesShape> = storeData.serves
 
