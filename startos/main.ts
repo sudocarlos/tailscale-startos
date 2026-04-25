@@ -139,19 +139,19 @@ export const main = sdk.setupMain(async ({ effects }) => {
               console.error('Failed to persist tailscale status:', e)
             }
 
-            // Clear the pending auth key once the node is Running so it is not
+            // Clear any persisted auth key once the node is Running so it is not
             // re-applied on subsequent restarts (the identity is already persisted
-            // in tailscaled.state).
-            if (pendingAuthKey) {
-              try {
-                const currentStore = (await storeJson.read().once()) ?? initialStore
-                if (currentStore.authKey) {
-                  await storeJson.write(effects, { ...currentStore, authKey: null })
-                  console.info('[main] Auth key consumed and cleared from store.json.')
-                }
-              } catch (e) {
-                console.error('[main] Failed to clear auth key from store.json:', e)
+            // in tailscaled.state). Check the current store value rather than
+            // pendingAuthKey so keys written by the login action while the service
+            // was already running are also cleared.
+            try {
+              const currentStore = (await storeJson.read().once()) ?? initialStore
+              if (currentStore.authKey) {
+                await storeJson.write(effects, { ...currentStore, authKey: null })
+                console.info('[main] Auth key consumed and cleared from store.json.')
               }
+            } catch (e) {
+              console.error('[main] Failed to clear auth key from store.json:', e)
             }
           }
 

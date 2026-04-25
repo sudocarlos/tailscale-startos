@@ -83,11 +83,11 @@ export const servesShape = z.record(
  * `serves` — the per-package/interface serve port-mapping table (the entire
  *   former top-level shape, now nested).
  *
- * `authKey` — a Tailscale auth key (tskey-auth-...) submitted via the Get
- *   Started action while the container was stopped.  It is passed to
- *   `tailscaled` as the `TS_AUTH_KEY` environment variable on next start and
- *   cleared from the store once the node reaches BackendState=Running so it
- *   is never reused across restarts.
+ * `authKey` — a Tailscale auth key (tskey-auth-...) persisted whenever it is
+ *   submitted via the Get Started action.  If the node is not already logged
+ *   in, it is passed to `tailscaled` via `tailscale login` once the daemon
+ *   socket is ready, then cleared from the store once consumed so it is not
+ *   reused across later restarts.
  *
  * A z.union is used to accept the legacy top-level serves format (from
  * before the store was refactored) and migrate it transparently so that

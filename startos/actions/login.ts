@@ -95,6 +95,12 @@ export const getStarted = sdk.Action.withInput(
             { env: { TS_SOCKET: SOCKET, TS_AUTHKEY: authKey } },
           )
           if (loginResult.exitCode !== 0) {
+            // The key was rejected — clear it from the store so it is not
+            // retried on every subsequent restart.
+            try {
+              const s = (await storeJson.read().once()) ?? { ...storeData, authKey }
+              await storeJson.write(effects, { ...s, authKey: null })
+            } catch {}
             throw new Error(
               'tailscale login failed: ' +
                 (loginResult.stderr?.toString().trim() ||
@@ -144,8 +150,14 @@ export const getStarted = sdk.Action.withInput(
                 const rawDns = statusData.Self?.DNSName ?? ''
                 const dnsName = rawDns.endsWith('.') ? rawDns.slice(0, -1) : rawDns
                 await statusJson.write(effects, { ip, dnsName })
+                // Clear the persisted key now that the node is Running so it
+                // is not re-applied via tailscale login on the next restart.
+                try {
+                  const s = (await storeJson.read().once()) ?? { ...storeData, authKey }
+                  await storeJson.write(effects, { ...s, authKey: null })
+                } catch {}
                 console.info(
-                  `[get-started] status.json updated: ip=${ip} dnsName=${dnsName}`,
+                  `[get-started] status.json updated: ip=${ip} dnsName=${dnsName}; authKey cleared`,
                 )
                 return
               }
@@ -161,12 +173,24 @@ export const getStarted = sdk.Action.withInput(
         },
       )
     } catch (err) {
-      // Container is likely stopped — the key is already persisted in store.json
-      // and will be applied via TS_AUTH_KEY on the next start.
-      console.info(
-        `[get-started] Live login attempt skipped (container may be stopped): ${err}. ` +
-          'Auth key is saved and will be applied on next start.',
-      )
+      // Only suppress errors that indicate the socket is unavailable (container
+      // stopped).  Any other error (bad key, network, etc.) is re-thrown so the
+      // user sees it instead of silently assuming "will apply on next start".
+      const msg = String(err)
+      const isSocketError =
+        msg.includes('no such file') ||
+        msg.includes('ENOENT') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('connect') ||
+        msg.includes('socket')
+      if (isSocketError) {
+        console.info(
+          `[get-started] Live login skipped — daemon socket unavailable (container stopped). ` +
+            'Auth key is saved and will be applied on next start.',
+        )
+      } else {
+        throw err
+      }
     }
   },
 )
