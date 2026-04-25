@@ -37,7 +37,7 @@ export const getStarted = sdk.Action.withInput(
       'Generate a new key at https://login.tailscale.com/admin/settings/keys',
     warning: 'Alternatively, go to Dashboard and click Open UI for interactive login.',
     allowedStatuses: 'any',
-    group: null,
+    group: 'Tailscale',
     visibility: 'enabled',
   }),
 

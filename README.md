@@ -64,7 +64,7 @@ temp containers can reach the tailscaled Unix socket):
 **Key files:**
 
 - `tailscale/tailscaled.state` — node identity, keys, and tailnet membership
-- `startos/store.json` — top-level object containing `machineName` (the Tailscale hostname), `hostnameSet` (bool, true once applied), and `serves` (maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves)
+- `startos/store.json` — top-level object containing `machineName` (the Tailscale hostname), `authKey` (nullable string, persisted between restarts and cleared once the node reaches `BackendState=Running`), and `serves` (maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves)
 - `startos/status.json` — cached `{ ip, dnsName }` written on each successful health check
 
 All state persists across restarts. The node retains its Tailscale IP address as
@@ -88,7 +88,7 @@ long as `tailscaled.state` is intact.
 No auth key or pre-configuration is required beyond the machine name step.
 All other setup happens interactively through the Tailscale web interface.
 
-Alternatively, use the **Login with Auth Key** action (see [Actions](#actions-startos-ui))
+Alternatively, use the **Login** action (see [Actions](#actions-startos-ui))
 to authenticate headlessly without a browser.
 
 ---
@@ -100,7 +100,7 @@ All Tailscale configuration is managed through the **Tailscale web interface**
 
 | Feature             | How to configure                          |
 | ------------------- | ----------------------------------------- |
-| Login / auth        | Web UI → Sign in, or **Get Started - Login** action |
+| Login / auth        | Web UI → Sign in, or **Login** action               |
 | Machine name        | Actions panel → Set Machine Name          |
 | Subnet router       | Web UI → Settings → Subnet router         |
 | Exit node           | Web UI → This device → Exit node          |
@@ -140,7 +140,7 @@ traffic is handled internally by tailscaled in userspace networking mode.
 
 ## Actions (StartOS UI)
 
-### Set Machine Name
+### Machine Name
 
 Visible in the Actions panel. Works whether the service is running or stopped.
 
@@ -164,15 +164,15 @@ the new name.
   shared temp subcontainer. If the daemon is reachable the rename takes effect
   instantly without a restart; serve URLs update within one health-check cycle
   (~10 s) once Tailscale reflects the new `Self.DNSName`.
-- Re-running this action (rename) resets `hostnameSet` so the startup oneshot
-  will reconfirm the name on the next start.
+- Re-running this action (rename) stores the new name so the startup oneshot will reconfirm it on the next start.
 
-### Get Started - Login
+### Login
 
 Visible in the Actions panel. Works whether the service is running or stopped.
 
-Authenticates the node to your Tailscale network. On first install, an important
-task is automatically created prompting you to run this action.
+Authenticates the node to your Tailscale network using an auth key. On first
+install, an important task is automatically created prompting you to run this
+action.
 
 **Input:**
 
@@ -182,13 +182,17 @@ task is automatically created prompting you to run this action.
 
 **What it does internally:**
 
+- The auth key is always saved to `store.json` when provided.
+- If the service is **running** and the daemon socket is reachable:
+  1. Runs `tailscale login --auth-key=<key>` immediately.
+  2. Clears `authKey` from the store once `BackendState === "Running"`.
+- If the service is **stopped** (socket unavailable):
+  1. Saves the key to `store.json`.
+  2. On next start, the ready-check detects `BackendState=NeedsLogin` and runs
+     `tailscale login --auth-key=<key>` automatically.
+  3. Clears `authKey` from the store once `BackendState === "Running"`.
 - If no auth key is provided, the action completes immediately — open the Web UI
   to sign in interactively once the service is running.
-- If an auth key is provided:
-  1. Runs `tailscale login --auth-key=<key>` via the shared daemon socket.
-  2. Polls `tailscale status --json` (up to 30 seconds) until `BackendState === "Running"`.
-  3. Writes the node's Tailscale IP and MagicDNS name to `startos/status.json`,
-     which triggers the URL plugin to immediately export updated Tailscale URLs.
 
 **Key types and expiry:**
 
@@ -347,19 +351,25 @@ actions:
     description: Remove a tailscale serve for a service interface
     state: startos/store.json
   - id: set-machine-name   # visible in the Actions panel
+    name: Machine Name
     description: Set the hostname advertised on the tailnet; critical first-run task blocks startup until completed
     input: machineName (string, required, default 'startos') — 1–63 chars, lowercase letters/numbers/hyphens only
     behavior: |
-      write machineName + hostnameSet=false to startos/store.json
-      if daemon running: tailscale set --hostname=<name> via shared temp container, then hostnameSet=true
+      write machineName to startos/store.json
+      if daemon running: tailscale set --hostname=<name> via shared temp container
       if daemon stopped: startup set-hostname oneshot applies the name on next start
-  - id: get-started   # visible in the Actions panel
+  - id: login   # visible in the Actions panel
+    name: Login
     description: Authenticate to Tailscale; optional auth key for headless login, or leave blank to use the web UI
     input: authKey (string, optional) — tskey-auth-... from admin console; leave blank to sign in via web UI
     behavior: |
-      if authKey blank: return immediately (user logs in via web UI)
-      if authKey provided:
+      always save authKey to startos/store.json when provided
+      if daemon running and socket reachable:
         tailscale login --auth-key=<key>
-        poll BackendState until Running (30s timeout)
-        write ip + dnsName to startos/status.json (triggers URL plugin refresh)
+        clear authKey from store once BackendState=Running
+      if daemon stopped:
+        authKey persists in store.json until next start
+        ready-check detects BackendState=NeedsLogin and runs tailscale login --auth-key=<key>
+        clears authKey from store once BackendState=Running
+      if authKey blank: return immediately (user logs in via web UI)
 ```

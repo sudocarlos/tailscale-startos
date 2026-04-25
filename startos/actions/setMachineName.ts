@@ -46,7 +46,7 @@ export const setMachineName = sdk.Action.withInput(
       '"Auto-generate from OS hostname" must be enabled in the Tailscale ' +
       'admin console (default): https://login.tailscale.com/admin/machines',
     allowedStatuses: 'any',
-    group: null,
+    group: 'Tailscale',
     visibility: 'enabled',
   }),
 
