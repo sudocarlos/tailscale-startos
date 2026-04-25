@@ -33,8 +33,8 @@ export const getStarted = sdk.Action.withInput(
   async () => ({
     name: 'Tailscale Login',
     description:
-      'Provide a Tailscale auth key for headless login, ' +
-      'or leave blank and open the Web UI to sign in interactively after the service starts.',
+      'Provide a Tailscale auth key to login. ' +
+      'Generate a new key at https://login.tailscale.com/admin/settings/keys',
     warning: 'Alternatively, go to Dashboard and click Open UI for interactive login.',
     allowedStatuses: 'any',
     group: null,
