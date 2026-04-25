@@ -11,7 +11,7 @@ export const manifest = setupManifest({
   donationUrl: null,
   docsUrls: ['https://tailscale.com/docs/'],
   description: i18n.description,
-  volumes: ['tailscale', 'startos', 'taildrop'],
+  volumes: ['tailscale', 'startos', 'taildrop', 'filebrowser-config'],
   images: {
     tailscale: {
       source: { dockerTag: 'ghcr.io/tailscale/tailscale:v1.96.5' },

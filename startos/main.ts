@@ -35,12 +35,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
     .mountVolume({
       volumeId: 'taildrop',
       subpath: null,
-      mountpoint: '/taildrop',
+      mountpoint: '/srv',
       readonly: true,
     })
     .mountVolume({
-      volumeId: 'startos',
-      subpath: 'filebrowser',
+      volumeId: 'filebrowser-config',
+      subpath: null,
       mountpoint: '/config',
       readonly: false,
     })
@@ -362,39 +362,31 @@ export const main = sdk.setupMain(async ({ effects }) => {
     .addOneshot('chown-filebrowser-config', {
       subcontainer: fileBrowserSubcontainer,
       exec: {
-        fn: async () => {
-          console.info('[chown-filebrowser-config] fixing ownership of /config for uid/gid 1000')
-          const r = await fileBrowserSubcontainer.exec(['chown', '-R', '1000:1000', '/config'])
-          if (r.exitCode !== 0) {
-            throw new Error(
-              `[chown-filebrowser-config] chown failed: ${r.stderr?.toString().trim() || r.stdout?.toString().trim() || `exit code ${r.exitCode}`}`,
-            )
-          }
-          console.info('[chown-filebrowser-config] /config ownership fixed')
-          return null
-        },
+        command: ['chown', '-R', 'user:user', '/srv', '/config'],
+        user: 'root',
       },
       requires: [],
     })
     .addDaemon('taildrop-files', {
       subcontainer: fileBrowserSubcontainer,
       exec: {
-        command: [
-          '/bin/filebrowser',
+        command: sdk.useEntrypoint([
           '--noauth',
-          '--root=/taildrop',
-          '--address=0.0.0.0',
           '--port=' + FILEBROWSER_PORT,
           '--database=/config/filebrowser.db',
-        ],
+        ]),
       },
       ready: {
         display: 'Taildrop File Browser',
         fn: () =>
-          sdk.healthCheck.checkPortListening(effects, FILEBROWSER_PORT, {
-            successMessage: 'The file browser is ready',
-            errorMessage: 'The file browser is not yet ready',
-          }),
+          sdk.healthCheck.checkWebUrl(
+            effects,
+            `http://localhost:${FILEBROWSER_PORT}/health`,
+            {
+              successMessage: 'The file browser is ready',
+              errorMessage: 'The file browser is not yet ready',
+            },
+          ),
       },
       requires: ['chown-filebrowser-config'],
     })
