@@ -180,7 +180,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
           // the serves will be reapplied on the next start once the node is
           // connected.
           const POLL_INTERVAL_MS = 500
-          const POLL_TIMEOUT_MS = 30_000
+          const POLL_TIMEOUT_MS = 10_000
           const deadline = Date.now() + POLL_TIMEOUT_MS
 
           let reachedRunning = false
