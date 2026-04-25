@@ -31,7 +31,7 @@ export const getStarted = sdk.Action.withInput(
 
   // metadata
   async () => ({
-    name: 'Tailscale Login',
+    name: 'Login',
     description:
       'Provide a Tailscale auth key to login. ' +
       'Generate a new key at https://login.tailscale.com/admin/settings/keys',

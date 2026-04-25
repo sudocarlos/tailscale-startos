@@ -38,11 +38,13 @@ export const setMachineName = sdk.Action.withInput(
 
   // metadata
   async () => ({
-    name: 'Set Machine Name',
-    description: 'Set the Tailscale machine name.',
+    name: 'Machine Name',
+    description:
+      'Set the name for your machine on your Tailscale network. ' +
+      'Determines MagicDNS URL, startos.example.ts.net.',
     warning:
       '"Auto-generate from OS hostname" must be enabled in the Tailscale ' +
-      'admin console: https://login.tailscale.com/admin/machines',
+      'admin console (default): https://login.tailscale.com/admin/machines',
     allowedStatuses: 'any',
     group: null,
     visibility: 'enabled',
