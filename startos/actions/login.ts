@@ -31,11 +31,11 @@ export const getStarted = sdk.Action.withInput(
 
   // metadata
   async () => ({
-    name: 'Get Started - Login',
+    name: 'Tailscale Login',
     description:
-      'Complete first-time setup. Provide a Tailscale auth key for headless login, ' +
+      'Provide a Tailscale auth key for headless login, ' +
       'or leave blank and open the Web UI to sign in interactively after the service starts.',
-    warning: null,
+    warning: 'Alternatively, go to Dashboard and click Open UI for interactive login.',
     allowedStatuses: 'any',
     group: null,
     visibility: 'enabled',
