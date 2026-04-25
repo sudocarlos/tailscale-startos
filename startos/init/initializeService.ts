@@ -19,9 +19,7 @@ export const initializeService = sdk.setupOnInit(async (effects, kind) => {
   // the user can accept it immediately or pick a custom name.
   await sdk.action.createOwnTask(effects, setMachineName, 'critical', {
     reason:
-      'Set your Tailscale machine name before starting the service. ' +
-      "The default is 'startos'. Accept the default or enter a custom name. " +
-      'This only takes effect when "Auto-generate from OS hostname" is enabled ' +
-      '(the default) in the Tailscale admin console.',
+      'Set the name for your machine on your Tailscale network. ' +
+      'Determines MagicDNS URL, startos.example.ts.net.',
   })
 })

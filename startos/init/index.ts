@@ -16,9 +16,8 @@ async function scheduleGetStarted(
   if (kind !== 'install') return
   await sdk.action.createOwnTask(effects, getStarted, 'important', {
     reason:
-      'Authenticate Tailscale: provide an auth key for headless login, ' +
-      'or open the Web UI to sign in interactively. ' +
-      'Generate an auth key at https://login.tailscale.com/admin/settings/keys',
+      'Provide a Tailscale auth key to login. ' +
+      'Generate a new key at https://login.tailscale.com/admin/settings/keys',
     replayId: 'get-started-first-launch',
   })
 }
