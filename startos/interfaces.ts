@@ -1,11 +1,11 @@
 import { sdk } from './sdk'
-import { FILEBROWSER_PORT } from './constants'
+import { UI_PORT, FILEBROWSER_PORT } from './constants'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const uiMulti = sdk.MultiHost.of(effects, 'ui')
-  const uiOrigin = await uiMulti.bindPort(8080, {
+  const uiOrigin = await uiMulti.bindPort(UI_PORT, {
     protocol: 'http',
-    preferredExternalPort: 8080,
+    preferredExternalPort: UI_PORT,
   })
 
   const ui = sdk.createInterface(effects, {

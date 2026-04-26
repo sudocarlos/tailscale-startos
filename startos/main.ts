@@ -362,7 +362,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     .addOneshot('chown-filebrowser-config', {
       subcontainer: fileBrowserSubcontainer,
       exec: {
-        command: ['chown', '-R', 'user:user', '/srv', '/config'],
+        command: ['chown', '-R', 'user:user', '/config'],
         user: 'root',
       },
       requires: [],

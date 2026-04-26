@@ -43,9 +43,9 @@ expose other StartOS services to your tailnet via `tailscale serve`.
 | Image         | `ghcr.io/tailscale/tailscale:v1.96.5` |
 | File Browser  | `filebrowser/filebrowser:v2.63.2`  |
 | Architectures | x86_64, aarch64                    |
-| Runtime       | Three daemons across two subcontainers |
+| Runtime       | Four daemons across two subcontainers |
 
-Three daemons across two subcontainers (the Tailscale subcontainer uses `sharedRun: true` so that action temp containers can reach the tailscaled Unix socket):
+Four daemons across two subcontainers (the Tailscale subcontainer uses `sharedRun: true` so that action temp containers can reach the tailscaled Unix socket):
 
 1. **`tailscaled`** — the Tailscale daemon, running in userspace networking mode
 2. **`tailscale-web`** — runs `tailscale web --listen=0.0.0.0:8080`, exposing the management UI
@@ -63,6 +63,7 @@ Three daemons across two subcontainers (the Tailscale subcontainer uses `sharedR
 | `tailscale` | `/var/lib/tailscale`  | Persistent daemon state and identity           |
 | `startos`   | (JS runtime)          | Serve port mappings (`store.json`), cached Tailscale IP/DNS (`status.json`) |
 | `taildrop`  | `/taildrop`           | Files received via Taildrop (user-visible)     |
+| `filebrowser-config` | `/config`    | Filebrowser persistent configuration (database) |
 
 **Key files:**
 
@@ -324,6 +325,7 @@ volumes:
   tailscale: /var/lib/tailscale       # daemon state
   startos: (js runtime)               # store.json, status.json
   taildrop: /taildrop                 # received Taildrop files (read-write for taildrop-receive, read-only for taildrop-files)
+  filebrowser-config: /config         # filebrowser persistent configuration (database)
 ports:
   8080: Tailscale web interface (HTTP)
   8081: Taildrop file browser (HTTP, no auth)
@@ -358,10 +360,10 @@ daemons:
       If not logged in, the daemon exits and restarts; ready check returns loading until connected.
   - id: taildrop-files
     image: filebrowser/filebrowser:v2.63.2
-    command: filebrowser --noauth --root=/taildrop --address=0.0.0.0 --port=8081 --database=/dev/null
+    command: filebrowser --noauth --address=0.0.0.0 --port=8081 --database=/config/filebrowser.db
     health: port 8081 listening
-    requires: []
-    notes: Read-only view of the taildrop volume. No authentication required.
+    requires: [chown-filebrowser-config]
+    notes: Read-only view of the taildrop volume (mounted at /srv). No authentication required.
 actions:
   - id: add-serve   # exposed via URL plugin table action
     description: Assign a tailnet port and configure tailscale serve for a service interface
