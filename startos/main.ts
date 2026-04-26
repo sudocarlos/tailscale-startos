@@ -3,25 +3,53 @@ import { statusJson } from './fileModels/status.json'
 import { storeJson } from './fileModels/store.json'
 import { parseTailscaleIp, parseDnsName } from './utils'
 import { applyServicesConfig } from './serves'
-import { UI_PORT } from './constants'
+import { UI_PORT, FILEBROWSER_PORT } from './constants'
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info('Starting Tailscale!')
 
-  const mounts = sdk.Mounts.of().mountVolume({
-    volumeId: 'tailscale',
-    subpath: null,
-    mountpoint: STATE_DIR,
-    readonly: false,
-  })
+  const mounts = sdk.Mounts.of()
+    .mountVolume({
+      volumeId: 'tailscale',
+      subpath: null,
+      mountpoint: STATE_DIR,
+      readonly: false,
+    })
+    .mountVolume({
+      volumeId: 'taildrop',
+      subpath: null,
+      mountpoint: '/taildrop',
+      readonly: false,
+    })
 
   const subcontainer = await sdk.SubContainer.of(
     effects,
     { imageId: 'tailscale', sharedRun: true },
     mounts,
     'tailscale-sub',
+  )
+
+  const fileBrowserMounts = sdk.Mounts.of()
+    .mountVolume({
+      volumeId: 'taildrop',
+      subpath: null,
+      mountpoint: '/srv',
+      readonly: true,
+    })
+    .mountVolume({
+      volumeId: 'filebrowser-config',
+      subpath: null,
+      mountpoint: '/config',
+      readonly: false,
+    })
+
+  const fileBrowserSubcontainer = await sdk.SubContainer.of(
+    effects,
+    { imageId: 'filebrowser' },
+    fileBrowserMounts,
+    'filebrowser-sub',
   )
 
   // Read any pending auth key saved by the Get Started action while the
@@ -283,5 +311,83 @@ export const main = sdk.setupMain(async ({ effects }) => {
           }),
       },
       requires: ['tailscaled', 'set-hostname'],
+    })
+    .addDaemon('taildrop-receive', {
+      subcontainer,
+      exec: {
+        command: [
+          'tailscale',
+          '--socket=' + SOCKET,
+          'file',
+          'get',
+          '--loop',
+          '/taildrop',
+        ],
+      },
+      ready: {
+        display: 'Taildrop Receive',
+        fn: async () => {
+          const result = await subcontainer.exec([
+            'tailscale',
+            '--socket=' + SOCKET,
+            'status',
+            '--json',
+          ])
+          if (result.exitCode !== 0) {
+            return {
+              result: 'loading',
+              message: 'Waiting for Tailscale daemon...',
+            }
+          }
+          let statusData: { BackendState?: string } = {}
+          try {
+            statusData = JSON.parse(result.stdout.toString().trim())
+          } catch {}
+          const backendState = statusData.BackendState ?? 'unknown'
+          if (backendState !== 'Running') {
+            return {
+              result: 'loading',
+              message: `Waiting for Tailscale to connect (${backendState})...`,
+            }
+          }
+          return {
+            result: 'success',
+            message: 'Ready to receive files via Taildrop',
+          }
+        },
+        gracePeriod: 10_000,
+      },
+      requires: ['set-hostname'],
+    })
+    .addOneshot('chown-filebrowser-config', {
+      subcontainer: fileBrowserSubcontainer,
+      exec: {
+        command: ['chown', '-R', 'user:user', '/config'],
+        user: 'root',
+      },
+      requires: [],
+    })
+    .addDaemon('taildrop-files', {
+      subcontainer: fileBrowserSubcontainer,
+      exec: {
+        command: sdk.useEntrypoint([
+          '--noauth',
+          '--port=' + FILEBROWSER_PORT,
+          '--database=/config/filebrowser.db',
+        ]),
+      },
+      ready: {
+        display: 'Taildrop File Browser',
+        fn: () =>
+          sdk.healthCheck.checkWebUrl(
+            effects,
+            `http://localhost:${FILEBROWSER_PORT}/health`,
+            {
+              successMessage: 'The file browser is ready',
+              errorMessage: 'The file browser is not yet ready',
+            },
+          ),
+      },
+      requires: ['chown-filebrowser-config'],
     })
 })
