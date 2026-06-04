@@ -41,16 +41,18 @@ expose other StartOS services to your tailnet via `tailscale serve`.
 | Property      | Value                              |
 | ------------- | ---------------------------------- |
 | Image         | `ghcr.io/tailscale/tailscale:v1.96.5` |
+| File Browser  | `filebrowser/filebrowser:v2.63.2`  |
 | Architectures | x86_64, aarch64                    |
-| Runtime       | Two daemons in one subcontainer    |
+| Runtime       | Four daemons across two subcontainers |
 
-Two daemons share a single subcontainer (with `sharedRun: true` so that action
-temp containers can reach the tailscaled Unix socket):
+Four daemons across two subcontainers (the Tailscale subcontainer uses `sharedRun: true` so that action temp containers can reach the tailscaled Unix socket):
 
 1. **`tailscaled`** — the Tailscale daemon, running in userspace networking mode
 2. **`tailscale-web`** — runs `tailscale web --listen=0.0.0.0:8080`, exposing the management UI
+3. **`taildrop-receive`** — runs `tailscale file get --loop /taildrop`, saving incoming Taildrop files to the `taildrop` volume
+4. **`taildrop-files`** — runs `filebrowser --noauth --root=/taildrop` on port 8081, exposing a web UI to browse and download received files
 
-`tailscale-web` starts only after `tailscaled` is ready.
+`tailscale-web` and `taildrop-receive` both start only after `tailscaled` and `set-hostname` are ready. `taildrop-files` starts independently in its own subcontainer.
 
 ---
 
@@ -60,6 +62,8 @@ temp containers can reach the tailscaled Unix socket):
 | ----------- | --------------------- | ---------------------------------------------- |
 | `tailscale` | `/var/lib/tailscale`  | Persistent daemon state and identity           |
 | `startos`   | (JS runtime)          | Serve port mappings (`store.json`), cached Tailscale IP/DNS (`status.json`) |
+| `taildrop`  | `/taildrop`           | Files received via Taildrop (user-visible)     |
+| `filebrowser-config` | `/config`    | Filebrowser persistent configuration (database) |
 
 **Key files:**
 
@@ -105,7 +109,7 @@ All Tailscale configuration is managed through the **Tailscale web interface**
 | Subnet router       | Web UI → Settings → Subnet router         |
 | Exit node           | Web UI → This device → Exit node          |
 | Tailscale SSH       | Web UI → Settings → Tailscale SSH server  |
-| Logout / re-auth    | Web UI → Settings → Log out               |
+| Taildrop files      | Service Interfaces → Taildrop Files   |
 | Expose services     | URL plugin → Add Serve (tile action)      |
 
 ### Daemon environment
@@ -125,6 +129,7 @@ The daemon is started with the following fixed arguments:
 | Interface | Type   | Port | Description                               |
 | --------- | ------ | ---- | ----------------------------------------- |
 | `ui`      | Web UI | 8080 | Tailscale device management web interface |
+| `taildrop-files` | Web UI | 8081 | Browse and download files received via Taildrop |
 
 The Tailscale web interface is accessible over LAN and Tor via the standard
 StartOS interface mechanism on port 8080.
@@ -256,10 +261,12 @@ metadata — the existing tailnet port is preserved.
 
 ## Health Checks
 
-| Check           | Display Name     | Method                                    |
-| --------------- | ---------------- | ----------------------------------------- |
-| `tailscaled`    | Tailscale Daemon | `tailscale status --json` exits 0         |
-| `tailscale-web` | Web Interface    | TCP port 8080 is listening                |
+| Check              | Display Name          | Method                                    |
+| ------------------ | --------------------- | ----------------------------------------- |
+| `tailscaled`       | Tailscale Daemon      | `tailscale status --json` exits 0         |
+| `tailscale-web`    | Web Interface         | TCP port 8080 is listening                |
+| `taildrop-receive` | Taildrop Receive      | `tailscale status --json` BackendState === 'Running' |
+| `taildrop-files`   | Taildrop File Browser | TCP port 8081 is listening                |
 
 On each successful `tailscaled` health check, the node's Tailscale IP and
 MagicDNS name are written to `startos/status.json`.  Once `tailscaled` is
@@ -280,7 +287,7 @@ None. Tailscale is a standalone service.
    routing for other containers requires SOCKS5 or HTTP proxy configuration.
 2. **No CLI access** — interact only through the web interface or StartOS
    actions; the `tailscale` CLI is not exposed to the StartOS user directly.
-3. **No Taildrop** — file transfer via Taildrop is not tested and not supported.
+3. **No Taildrop send** — Taildrop file *receive* is supported (files are saved to the `taildrop` volume). Sending files from StartOS to other devices is not supported. Tagged nodes are excluded by Tailscale — the device must be logged in as a personal (non-tagged) account for Taildrop to work. The **Send Files** feature must also be enabled in the [Tailscale admin console](https://login.tailscale.com/admin/settings/features). Taildrop is still in public alpha.
 4. **HTTPS reverse proxy for HTTP services** — `tailscale serve --bg --https`
    is used for HTTP backends; Tailscale terminates TLS so clients access
    services over `https://`. Non-HTTP services use raw TCP forwarding.
@@ -317,8 +324,11 @@ architectures: [x86_64, aarch64]
 volumes:
   tailscale: /var/lib/tailscale       # daemon state
   startos: (js runtime)               # store.json, status.json
+  taildrop: /taildrop                 # received Taildrop files (read-write for taildrop-receive, read-only for taildrop-files)
+  filebrowser-config: /config         # filebrowser persistent configuration (database)
 ports:
   8080: Tailscale web interface (HTTP)
+  8081: Taildrop file browser (HTTP, no auth)
 dependencies: none
 daemons:
   - id: tailscaled
@@ -338,7 +348,22 @@ daemons:
   - id: tailscale-web
     command: tailscale web --listen=0.0.0.0:8080
     health: port 8080 listening
-    requires: [tailscaled, restore-serves]
+    requires: [tailscaled, set-hostname]
+  - id: taildrop-receive
+    command: tailscale file get --loop /taildrop
+    health: tailscale status --json, BackendState=Running
+    requires: [set-hostname]
+    notes: |
+      Saves incoming Taildrop files to the taildrop volume (/taildrop).
+      Node must be logged in as a personal (non-tagged) device.
+      Send Files must be enabled in the Tailscale admin console.
+      If not logged in, the daemon exits and restarts; ready check returns loading until connected.
+  - id: taildrop-files
+    image: filebrowser/filebrowser:v2.63.2
+    command: filebrowser --noauth --address=0.0.0.0 --port=8081 --database=/config/filebrowser.db
+    health: port 8081 listening
+    requires: [chown-filebrowser-config]
+    notes: Read-only view of the taildrop volume (mounted at /srv). No authentication required.
 actions:
   - id: add-serve   # exposed via URL plugin table action
     description: Assign a tailnet port and configure tailscale serve for a service interface
