@@ -30,6 +30,13 @@ export const storeEntry = z.object({
   scheme: z.string().nullable(),
   /** Port the upstream service listens on.  0 on legacy entries. */
   internalPort: z.number().int().min(0).max(65535),
+  /**
+   * Serve mode:
+   *   'serve'  → tailscale serve (tailnet-only)
+   *   'funnel' → tailscale funnel (public internet, ports 443/8443/10000 only)
+   * Defaults to 'serve' so existing entries without this field parse cleanly.
+   */
+  mode: z.enum(['serve', 'funnel']).default('serve'),
 })
 
 export type StoreEntry = z.infer<typeof storeEntry>
@@ -40,6 +47,7 @@ const legacySentinel = (port: number): StoreEntry => ({
   hostId: '',
   scheme: null,
   internalPort: 0,
+  mode: 'serve',
 })
 
 /** Shape of the serves sub-map: { [packageId]: { [interfaceId]: StoreEntry } } */

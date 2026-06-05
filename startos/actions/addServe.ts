@@ -1,10 +1,25 @@
 import { servesShape, storeJson } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
-import { assignPort, isPortAvailable, BLOCKED_PORTS } from '../utils'
+import {
+  assignFunnelPort,
+  assignPort,
+  assertFunnelPort,
+  FUNNEL_ALLOWED_PORTS,
+  isPortAvailable,
+  BLOCKED_PORTS,
+} from '../utils'
 import { z } from '@start9labs/start-sdk'
 
 const STATE_DIR = '/var/lib/tailscale'
+
+const FUNNEL_WARNING =
+  'While Tailscale aims to preserve privacy, exposing services to the ' +
+  'public internet inherently carries risks similar to port forwarding, ' +
+  'such as exposure to automated bots or vulnerabilities in the hosted ' +
+  'application itself. ' +
+  'Learn how Funnel works before proceeding: ' +
+  'https://tailscale.com/docs/features/tailscale-funnel#how-funnel-works'
 
 const { InputSpec, Value } = sdk
 
@@ -15,10 +30,31 @@ const inputSpec = InputSpec.of({
     hostId: string
     internalPort: number
   }>(),
+  mode: Value.select({
+    name: 'Serve Mode',
+    description:
+      'Tailscale Serve shares this interface only within your private tailnet. ' +
+      'Funnel publishes it on the PUBLIC INTERNET under your node\'s MagicDNS ' +
+      'name — Tailscale manages the TLS certificate, but anyone on the internet ' +
+      'can reach the service.\n\n' +
+      'While Tailscale aims to preserve privacy, exposing services to the public ' +
+      'internet inherently carries risks similar to port forwarding, such as ' +
+      'exposure to automated bots or vulnerabilities in the hosted application ' +
+      'itself.\n\n' +
+      'Funnel must also be enabled for your tailnet in the Tailscale admin ' +
+      'console and is restricted to ports 443, 8443, and 10000 only. ' +
+      'See https://tailscale.com/docs/features/tailscale-funnel#how-funnel-works',
+    default: 'serve' as 'serve' | 'funnel',
+    values: {
+      serve: 'Tailscale Serve (tailnet-only, any port)',
+      funnel: 'Funnel (PUBLIC internet — ports 443 / 8443 / 10000 only)',
+    },
+  }),
   port: Value.number({
     name: 'Tailnet Port',
     description:
-      'Port to expose on your Tailscale network. Leave blank to auto-assign.',
+      'Port to expose on your Tailscale network. For Funnel, must be 443, 8443, or 10000. ' +
+      'Leave blank to auto-assign.',
     required: false,
     default: null,
     integer: true,
@@ -35,8 +71,13 @@ export const addServe = sdk.Action.withInput(
   // metadata
   async () => ({
     name: 'Add Serve',
-    description: 'Expose this interface on your Tailscale network via tailscale serve',
-    warning: null,
+    description:
+      'Expose this interface on your Tailscale network via Tailscale Serve or Funnel.',
+    warning:
+      'Tailscale Serve is tailnet-only. ' +
+      'If you select Funnel mode this service will be visible to anyone on the ' +
+      'public internet — not just your tailnet. ' +
+      FUNNEL_WARNING,
     allowedStatuses: 'only-running',
     group: null,
     visibility: 'hidden',
@@ -53,6 +94,8 @@ export const addServe = sdk.Action.withInput(
     const { packageId: rawPkgId, interfaceId, hostId, internalPort } =
       input.urlPluginMetadata
     const packageId = rawPkgId ?? 'startos'
+    const mode: 'serve' | 'funnel' = input.mode ?? 'serve'
+
     // Use .once() to avoid "write after const" error
     const storeData = (await storeJson.read().once()) ?? {
       machineName: 'startos',
@@ -65,15 +108,9 @@ export const addServe = sdk.Action.withInput(
     const existing = serves[packageId]?.[interfaceId]
 
     console.info(
-      `[addServe] ${packageId}/${interfaceId} existing:`,
+      `[addServe] ${packageId}/${interfaceId} mode=${mode} existing:`,
       JSON.stringify(existing ?? null),
     )
-
-    // No early-return for already-configured entries — re-running add-serve
-    // always re-applies the serve so that entries lost (e.g. after
-    // uninstall/reinstall or manual `tailscale serve reset`) are restored.
-    // The port is preserved from the existing entry unless the user supplies
-    // a new one.
 
     // Resolve scheme and internal port from the service interface.
     // StarOS itself has no registered service interface; its UI is always
@@ -103,43 +140,75 @@ export const addServe = sdk.Action.withInput(
       resolvedInternalPort = iface?.addressInfo?.internalPort ?? internalPort
     }
 
-    console.info(
-      `[addServe] ${packageId}/${interfaceId} resolved → scheme=${scheme}, internalPort=${resolvedInternalPort}, tailnetPort=${existing !== undefined ? existing.port : '(new)'}`,
-    )
-
-    // Determine tailnet port:
-    //   1. User supplied a port: validate it, then use it (even for existing entries).
-    //   2. Existing fully-configured entry and no port supplied: preserve stored port.
-    //   3. Legacy entry (hostId === '') or new entry, no port: auto-assign.
+    // Determine tailnet port — logic differs by mode.
     let port: number
-    if (input.port !== null && input.port !== undefined) {
-      // Exclude the existing entry's own port from the "in use" check so the
-      // user can re-submit without being blocked by their own port.
-      const servesWithoutThis = {
-        ...serves,
-        [packageId]: { ...(serves[packageId] ?? {}) },
-      }
-      delete servesWithoutThis[packageId][interfaceId]
-      if (!isPortAvailable(servesWithoutThis, input.port)) {
-        const blocked = [...BLOCKED_PORTS].join(', ')
-        throw new Error(
-          `Port ${input.port} is reserved or already in use. ` +
-          `Blocked ports: ${blocked}. Choose a different port or leave blank to auto-assign.`,
+
+    if (mode === 'funnel') {
+      // ── Funnel port resolution ──────────────────────────────────────────
+      // Funnel only permits ports 443, 8443, and 10000.
+      if (input.port !== null && input.port !== undefined) {
+        assertFunnelPort(input.port)
+        // Check for conflicts against other entries (excluding this one).
+        const servesWithoutThis = {
+          ...serves,
+          [packageId]: { ...(serves[packageId] ?? {}) },
+        }
+        delete servesWithoutThis[packageId][interfaceId]
+        const allOtherPorts = Object.values(servesWithoutThis).flatMap(
+          (ifaces) => Object.values(ifaces).map((e) => e.port),
         )
+        if (allOtherPorts.includes(input.port)) {
+          throw new Error(
+            `Port ${input.port} is already in use by another serve entry. ` +
+            `Remove the existing entry first or choose a different Funnel port ` +
+            `(${FUNNEL_ALLOWED_PORTS.join(', ')}).`,
+          )
+        }
+        port = input.port
+      } else if (existing !== undefined && existing.mode === 'funnel' && existing.hostId !== '') {
+        // Preserve the stored funnel port for fully-configured existing entries.
+        port = existing.port
+      } else {
+        // Auto-assign the first free funnel port: 443 → 8443 → 10000.
+        port = assignFunnelPort(serves)
       }
-      port = input.port
-    } else if (existing !== undefined && existing.hostId !== '') {
-      // Preserve the stored port for fully-configured existing entries.
-      port = existing.port
     } else {
-      port = assignPort(serves)
+      // ── Serve port resolution (existing logic) ──────────────────────────
+      if (input.port !== null && input.port !== undefined) {
+        // Exclude the existing entry's own port from the "in use" check so the
+        // user can re-submit without being blocked by their own port.
+        const servesWithoutThis = {
+          ...serves,
+          [packageId]: { ...(serves[packageId] ?? {}) },
+        }
+        delete servesWithoutThis[packageId][interfaceId]
+        if (!isPortAvailable(servesWithoutThis, input.port)) {
+          const blocked = [...BLOCKED_PORTS].join(', ')
+          throw new Error(
+            `Port ${input.port} is reserved or already in use. ` +
+            `Blocked ports: ${blocked}. Choose a different port or leave blank to auto-assign.`,
+          )
+        }
+        port = input.port
+      } else if (existing !== undefined && existing.hostId !== '' && existing.mode !== 'funnel') {
+        // Preserve the stored port for fully-configured existing serve entries.
+        port = existing.port
+      } else {
+        port = assignPort(serves)
+      }
     }
+
+    console.info(
+      `[addServe] ${packageId}/${interfaceId} resolved → mode=${mode}, scheme=${scheme}, ` +
+      `internalPort=${resolvedInternalPort}, port=${port}`,
+    )
 
     const entry = {
       port,
       hostId,
       scheme,
       internalPort: resolvedInternalPort,
+      mode,
     }
 
     const updatedServes: z.infer<typeof servesShape> = {
@@ -165,5 +234,21 @@ export const addServe = sdk.Action.withInput(
     )
 
     await storeJson.write(effects, { ...storeData, serves: updatedServes })
+
+    // ── Result message ─────────────────────────────────────────────────────
+    // Layer 3 warning: shown only when the user confirmed Funnel mode.
+    if (mode === 'funnel') {
+      return {
+        version: '1' as const,
+        title: 'Funnel Added',
+        message:
+          `This service is now publicly accessible on the internet via Tailscale ` +
+          `Funnel on port ${port}. ` +
+          FUNNEL_WARNING +
+          ' To remove public access, click the Tailscale icon on this service\'s ' +
+          'URL row and choose Remove Serve.',
+        result: null,
+      }
+    }
   },
 )

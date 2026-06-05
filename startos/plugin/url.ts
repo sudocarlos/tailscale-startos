@@ -27,6 +27,7 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
       port: number
       hostId: string
       scheme: string | null
+      mode: 'serve' | 'funnel'
     }> = []
 
     for (const [packageId, ifaces] of Object.entries(storeData.serves)) {
@@ -42,6 +43,7 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
           port: entry.port,
           hostId: entry.hostId,
           scheme: entry.scheme,
+          mode: entry.mode,
         })
       }
     }
@@ -49,7 +51,7 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
     // Resolve live internalPort for each entry in parallel (Fix B).
     // Using .once() per interface avoids stacking live subscriptions (Fix C).
     await Promise.all(
-      candidates.map(async ({ packageId, interfaceId, port, hostId, scheme }) => {
+      candidates.map(async ({ packageId, interfaceId, port, hostId, scheme, mode }) => {
         let internalPort: number
 
         if (packageId === 'startos') {
@@ -87,6 +89,9 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
         // upstream SDK/platform change to add a TCP label before reworking
         // this.
         const ssl = scheme === 'http' || scheme === 'ws' || scheme === 'https' || scheme === 'wss'
+        // Only Funnel entries are truly public (internet-accessible).
+        // Serve entries stay within the private tailnet.
+        const isPublic = mode === 'funnel'
 
         await sdk.plugin.url
           .exportUrl(effects, {
@@ -97,7 +102,7 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
               hostId,
               internalPort,
               ssl,
-              public: true,
+              public: isPublic,
               hostname: status.dnsName,
               port,
               info: null,
