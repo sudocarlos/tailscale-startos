@@ -7,3 +7,6 @@ check-version:
 	@bash scripts/check-version.sh
 
 arches: check-version
+
+# Ensure JavaScript is compiled before packing regardless of INGREDIENTS evaluation
+$(PACKAGE_ID)_%.s9pk: javascript/index.js

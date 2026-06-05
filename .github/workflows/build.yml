@@ -41,6 +41,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build JavaScript
+        run: npm run build
+
       - name: Build ${{ matrix.arch }} package
         run: make ${{ matrix.make_target }}
 

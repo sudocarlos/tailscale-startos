@@ -61,7 +61,8 @@ import { VersionInfo } from '@start9labs/start-sdk'
 export const ${NEW_VAR} = VersionInfo.of({
   version: '${NEW_VERSION}:0',
   releaseNotes: {
-    en_US: 'Upstream release — update this before publishing.',
+    // TODO: Replace with real release notes from https://tailscale.com/changelog#client
+    en_US: 'Tailscale updated to v${NEW_VERSION}.',
   },
   migrations: {
     up: async ({ effects }) => {},
@@ -141,7 +142,9 @@ cat <<EOF
 Bumped to v${NEW_VERSION}.
 
 Next steps:
-  1. Edit ${NEW_FILE}  — update release notes
+  1. Edit ${NEW_FILE}  — add release notes from upstream changelog:
+       https://tailscale.com/changelog#client  (find the v${NEW_VERSION} entry)
+     Summarise all highlights since the previous pinned version, not just this one point release.
   2. Edit README.md                     — update version references
   3. Run: make                          — to verify the build
   4. Commit: feat: bump tailscale to v${NEW_VERSION}
