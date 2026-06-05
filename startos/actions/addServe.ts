@@ -14,12 +14,10 @@ import { z } from '@start9labs/start-sdk'
 const STATE_DIR = '/var/lib/tailscale'
 
 const FUNNEL_WARNING =
-  'While Tailscale aims to preserve privacy, exposing services to the ' +
-  'public internet inherently carries risks similar to port forwarding, ' +
-  'such as exposure to automated bots or vulnerabilities in the hosted ' +
-  'application itself. ' +
-  'Learn how Funnel works before proceeding: ' +
-  'https://tailscale.com/docs/features/tailscale-funnel#how-funnel-works'
+  'While Serve stays private to your tailnet, Funnel makes your service public. ' +
+  'Exposing apps to the open internet carries inherent security risks, opening ' +
+  'them up to bot traffic and public vulnerabilities. ' +
+  'See https://tailscale.com/docs/features/tailscale-funnel for details.'
 
 const { InputSpec, Value } = sdk
 
@@ -33,17 +31,12 @@ const inputSpec = InputSpec.of({
   mode: Value.select({
     name: 'Serve Mode',
     description:
-      'Tailscale Serve shares this interface only within your private tailnet. ' +
-      'Funnel publishes it on the PUBLIC INTERNET under your node\'s MagicDNS ' +
-      'name — Tailscale manages the TLS certificate, but anyone on the internet ' +
-      'can reach the service.\n\n' +
-      'While Tailscale aims to preserve privacy, exposing services to the public ' +
-      'internet inherently carries risks similar to port forwarding, such as ' +
-      'exposure to automated bots or vulnerabilities in the hosted application ' +
-      'itself.\n\n' +
-      'Funnel must also be enabled for your tailnet in the Tailscale admin ' +
-      'console and is restricted to ports 443, 8443, and 10000 only. ' +
-      'See https://tailscale.com/docs/features/tailscale-funnel#how-funnel-works',
+      'While Serve stays private to your tailnet, Funnel makes your service public. ' +
+      'Exposing apps to the open internet carries inherent security risks, opening ' +
+      'them up to bot traffic and public vulnerabilities. ' +
+      'See https://tailscale.com/docs/features/tailscale-funnel for details.\n\n' +
+      'Funnel must be enabled for your tailnet in the Tailscale admin console ' +
+      'and is restricted to ports 443, 8443, and 10000 only.',
     default: 'serve' as 'serve' | 'funnel',
     values: {
       serve: 'Tailscale Serve (tailnet-only, any port)',
