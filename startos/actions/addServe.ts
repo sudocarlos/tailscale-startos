@@ -235,11 +235,7 @@ export const addServe = sdk.Action.withInput(
         version: '1' as const,
         title: 'Funnel Added',
         message:
-          `This service is now publicly accessible on the internet via Tailscale ` +
-          `Funnel on port ${port}. ` +
-          FUNNEL_WARNING +
-          ' To remove public access, click the Tailscale icon on this service\'s ' +
-          'URL row and choose Remove Serve.',
+          `This service is now publicly accessible on the internet via Tailscale Funnel on port ${port}.`,
         result: null,
       }
     }
