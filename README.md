@@ -40,7 +40,7 @@ expose other StartOS services to your tailnet via `tailscale serve`.
 
 | Property      | Value                              |
 | ------------- | ---------------------------------- |
-| Image         | `ghcr.io/tailscale/tailscale:v1.96.5` |
+| Image         | `ghcr.io/tailscale/tailscale:v1.98.4` |
 | Architectures | x86_64, aarch64                    |
 | Runtime       | Two daemons in one subcontainer    |
 
@@ -284,7 +284,7 @@ None. Tailscale is a standalone service.
 4. **HTTPS reverse proxy for HTTP services** — `tailscale serve --bg --https`
    is used for HTTP backends; Tailscale terminates TLS so clients access
    services over `https://`. Non-HTTP services use raw TCP forwarding.
-5. **Web UI requires Tailscale v1.56.0+** — the `ghcr.io/tailscale/tailscale:v1.96.5`
+5. **Web UI requires Tailscale v1.56.0+** — the `ghcr.io/tailscale/tailscale:v1.98.4`
    image satisfies this requirement.
 
 ---
@@ -312,7 +312,7 @@ workflow.
 
 ```yaml
 package_id: tailscale
-image: ghcr.io/tailscale/tailscale:v1.96.5
+image: ghcr.io/tailscale/tailscale:v1.98.4
 architectures: [x86_64, aarch64]
 volumes:
   tailscale: /var/lib/tailscale       # daemon state
