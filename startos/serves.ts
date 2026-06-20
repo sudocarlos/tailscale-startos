@@ -140,8 +140,9 @@ export async function applyServicesConfig(
 
       const result = await sub.exec(cmd)
       if (result.exitCode !== 0) {
+        const subcommand = mode === 'funnel' ? 'funnel' : 'serve'
         throw new Error(
-          `tailscale serve failed for ${packageId}/${interfaceId}: ${result.stderr.toString()}`,
+          `tailscale ${subcommand} failed for ${packageId}/${interfaceId}: ${result.stderr.toString()}`,
         )
       }
       count++
