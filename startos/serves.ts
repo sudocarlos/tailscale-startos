@@ -44,6 +44,24 @@ export async function applyServicesConfig(
     )
   }
 
+  // Funnel state is stored separately from serve state in tailscaled —
+  // `serve reset` alone leaves previous funnel routes active.
+  // Reset funnel explicitly; this is a no-op when no funnel routes exist.
+  const funnelResetResult = await sub.exec([
+    'tailscale',
+    '--socket=' + SOCKET,
+    'funnel',
+    'reset',
+  ])
+  if (funnelResetResult.exitCode !== 0) {
+    // Log but don't throw — funnel reset fails on nodes where Funnel is not
+    // enabled in the tailnet admin console, which is a normal configuration.
+    console.warn(
+      `[serves] tailscale funnel reset exited ${funnelResetResult.exitCode}: ` +
+      funnelResetResult.stderr.toString().trim(),
+    )
+  }
+
   let count = 0
   for (const [packageId, ifaces] of Object.entries(store)) {
     for (const [interfaceId, entry] of Object.entries(ifaces)) {
@@ -55,53 +73,76 @@ export async function applyServicesConfig(
         continue
       }
 
-      const { port, scheme, internalPort } = entry
+      const { port, scheme, internalPort, mode } = entry
       // StarOS UI is reachable at 'startos'; other services use '<packageId>.startos'
       const host = packageId === 'startos' ? 'startos' : `${packageId}.startos`
 
-      let target: string
-      let isHttpProxy: boolean
+      let cmd: string[]
 
-      if (scheme === 'http' || scheme === 'ws') {
-        target = `http://${host}:${internalPort}`
-        isHttpProxy = true
-      } else if (scheme === 'https' || scheme === 'wss') {
-        target = `https+insecure://${host}:${internalPort}`
-        isHttpProxy = true
+      if (mode === 'funnel') {
+        // Funnel: Tailscale terminates TLS externally and proxies to an HTTP
+        // backend. Always use plain http:// as the target regardless of the
+        // upstream scheme — the node-facing side is always plain HTTP.
+        // External port must be 443, 8443, or 10000 (enforced at add-time too).
+        const funnelTarget = `http://${host}:${internalPort}`
+        console.info(
+          `[serves] ${packageId}/${interfaceId}: funnel --https=${port} ${funnelTarget}`,
+        )
+        cmd = [
+          'tailscale',
+          '--socket=' + SOCKET,
+          'funnel',
+          '--bg',
+          `--https=${port}`,
+          funnelTarget,
+        ]
       } else {
-        // TCP passthrough: null, 'ssh', 'dns', or any unrecognised scheme
-        target = `tcp://${host}:${internalPort}`
-        isHttpProxy = false
+        // Regular serve: http proxy vs tcp passthrough based on upstream scheme.
+        let target: string
+        let isHttpProxy: boolean
+
+        if (scheme === 'http' || scheme === 'ws') {
+          target = `http://${host}:${internalPort}`
+          isHttpProxy = true
+        } else if (scheme === 'https' || scheme === 'wss') {
+          target = `https+insecure://${host}:${internalPort}`
+          isHttpProxy = true
+        } else {
+          // TCP passthrough: null, 'ssh', 'dns', or any unrecognised scheme
+          target = `tcp://${host}:${internalPort}`
+          isHttpProxy = false
+        }
+
+        console.info(
+          `[serves] ${packageId}/${interfaceId}: scheme=${scheme} → ${isHttpProxy ? '--https' : '--tcp'} ${port} ${target}`,
+        )
+
+        cmd = isHttpProxy
+          ? [
+              'tailscale',
+              '--socket=' + SOCKET,
+              'serve',
+              '--bg',
+              '--https',
+              String(port),
+              target,
+            ]
+          : [
+              'tailscale',
+              '--socket=' + SOCKET,
+              'serve',
+              '--bg',
+              '--tcp',
+              String(port),
+              target,
+            ]
       }
-
-      console.info(
-        `[serves] ${packageId}/${interfaceId}: scheme=${scheme} → ${isHttpProxy ? '--https' : '--tcp'} ${port} ${target}`,
-      )
-
-      const cmd = isHttpProxy
-        ? [
-            'tailscale',
-            '--socket=' + SOCKET,
-            'serve',
-            '--bg',
-            '--https',
-            String(port),
-            target,
-          ]
-        : [
-            'tailscale',
-            '--socket=' + SOCKET,
-            'serve',
-            '--bg',
-            '--tcp',
-            String(port),
-            target,
-          ]
 
       const result = await sub.exec(cmd)
       if (result.exitCode !== 0) {
+        const subcommand = mode === 'funnel' ? 'funnel' : 'serve'
         throw new Error(
-          `tailscale serve failed for ${packageId}/${interfaceId}: ${result.stderr.toString()}`,
+          `tailscale ${subcommand} failed for ${packageId}/${interfaceId}: ${result.stderr.toString()}`,
         )
       }
       count++

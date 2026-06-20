@@ -7,8 +7,45 @@ import { UI_PORT } from './constants'
  * These cannot be used for serve entries.
  *  - 80, 443: reserved by Tailscale for HTTP/HTTPS on the tailnet
  *  - UI_PORT (8080): the Tailscale web UI
+ *
+ * NOTE: port 443 is blocked for regular serve entries but IS valid for
+ * Funnel. The funnel code path uses assertFunnelPort() / assignFunnelPort()
+ * instead of isPortAvailable() so it never hits this set.
  */
 export const BLOCKED_PORTS = new Set([80, 443, UI_PORT])
+
+/** The only external ports Tailscale Funnel accepts. */
+export const FUNNEL_ALLOWED_PORTS = [443, 8443, 10000] as const
+
+/**
+ * Throws a user-facing error if port is not a valid Tailscale Funnel port.
+ */
+export function assertFunnelPort(port: number): void {
+  if (!(FUNNEL_ALLOWED_PORTS as readonly number[]).includes(port)) {
+    throw new Error(
+      `Funnel only accepts ports ${FUNNEL_ALLOWED_PORTS.join(', ')}. ` +
+      `Choose one of those or switch to Tailscale Serve mode.`,
+    )
+  }
+}
+
+/**
+ * Returns the first unused Tailscale Funnel port from [443, 8443, 10000].
+ * Throws if all three are already assigned to existing entries.
+ */
+export function assignFunnelPort(store: z.infer<typeof servesShape>): number {
+  const allPorts = Object.values(store).flatMap((ifaces) =>
+    Object.values(ifaces).map((e) => e.port),
+  )
+  const used = new Set(allPorts)
+  for (const p of FUNNEL_ALLOWED_PORTS) {
+    if (!used.has(p)) return p
+  }
+  throw new Error(
+    `All Funnel ports (${FUNNEL_ALLOWED_PORTS.join(', ')}) are already in use. ` +
+    `Remove an existing Funnel entry before adding another.`,
+  )
+}
 
 /**
  * Assigns the next available Tailscale serve port.
