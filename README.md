@@ -105,7 +105,7 @@ All Tailscale configuration is managed through the **Tailscale web interface**
 | Subnet router       | Web UI → Settings → Subnet router         |
 | Exit node           | Web UI → This device → Exit node          |
 | Tailscale SSH       | Web UI → Settings → Tailscale SSH server  |
-| Logout / re-auth    | Web UI → Settings → Log out               |
+| Logout / re-auth    | **Logout** action (Actions panel), or Web UI → Settings → Log out |
 | Expose services     | URL plugin → Add Serve (tile action, choose Serve or Funnel mode) |
 
 ### Daemon environment
@@ -200,6 +200,25 @@ Auth keys expire after 1–90 days (default 90). After expiry, the authenticated
 node remains connected until its node key expires (default 180 days). See the
 [Tailscale auth key docs](https://tailscale.com/docs/features/access-control/auth-keys)
 for details on reusable, ephemeral, pre-approved, and tagged keys.
+
+### Logout
+
+Visible in the Actions panel. **Requires the service to be running.**
+
+Logs this node out of Tailscale, notifying the control plane so the node is
+removed from the tailnet and the admin console. After logout the node enters
+`NeedsLogin` state — use the **Login** action to re-authenticate.
+
+> **Note:** The service must be running when you invoke this action. Logout
+> requires a round-trip to the Tailscale control plane; if the daemon socket is
+> unreachable a clear error is returned rather than silently wiping local state.
+
+**What it does internally:**
+
+1. Runs `tailscale logout` against the running daemon via a shared temp subcontainer.
+2. Clears any staged `authKey` from `store.json` (so a saved key is not re-applied on the next start).
+3. Clears the cached `{ ip, dnsName }` from `status.json` (stale once the node leaves the tailnet).
+4. Returns a confirmation modal: _"This node has been logged out of Tailscale and removed from your tailnet."_
 
 ### Add Serve / Remove Serve
 
@@ -420,4 +439,14 @@ actions:
         ready-check detects BackendState=NeedsLogin and runs tailscale login --auth-key=<key>
         clears authKey from store once BackendState=Running
       if authKey blank: return immediately (user logs in via web UI)
+  - id: logout   # visible in the Actions panel
+    name: Logout
+    description: Log this node out of Tailscale; requires the service to be running (control-plane round-trip)
+    input: none
+    behavior: |
+      tailscale logout via shared temp subcontainer (requires daemon socket)
+      on success:
+        clear authKey from startos/store.json
+        clear ip + dnsName from startos/status.json
+      if socket unavailable: surface friendly error — start service first
 ```

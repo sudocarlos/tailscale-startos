@@ -1,13 +1,14 @@
 import { sdk } from '../sdk'
 import { statusJson } from '../fileModels/status.json'
 import { storeJson } from '../fileModels/store.json'
+import { isSocketUnavailableError } from '../utils'
 
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
-export const disconnect = sdk.Action.withoutInput(
+export const logout = sdk.Action.withoutInput(
   // id
-  'disconnect',
+  'logout',
 
   // metadata
   async () => ({
@@ -42,7 +43,7 @@ export const disconnect = sdk.Action.withoutInput(
         effects,
         { imageId: 'tailscale', sharedRun: true },
         mounts,
-        'tailscale-disconnect',
+        'tailscale-logout',
         async (sub) => {
           const result = await sub.exec([
             'tailscale',
@@ -56,14 +57,7 @@ export const disconnect = sdk.Action.withoutInput(
             const errText = stderr || stdout || `exit code ${result.exitCode}`
 
             // Detect socket-unavailable errors and surface a helpful message.
-            const isSocketError =
-              errText.includes('no such file') ||
-              errText.includes('ENOENT') ||
-              errText.includes('ECONNREFUSED') ||
-              errText.includes('connect: connection refused') ||
-              errText.includes('connect: no such file')
-
-            if (isSocketError) {
+            if (isSocketUnavailableError(errText)) {
               throw new Error(
                 'Tailscale daemon is not running. ' +
                   'Start the service first, then use Logout to log out.',
@@ -73,7 +67,7 @@ export const disconnect = sdk.Action.withoutInput(
             throw new Error('tailscale logout failed: ' + errText)
           }
 
-          console.info('[disconnect] tailscale logout succeeded.')
+          console.info('[logout] tailscale logout succeeded.')
         },
       )
     } catch (err) {
@@ -81,14 +75,7 @@ export const disconnect = sdk.Action.withoutInput(
 
       // Re-classify raw socket errors that bubble up before exec() returns
       // (e.g. the subcontainer itself cannot connect to the shared socket).
-      const isSocketError =
-        msg.includes('no such file') ||
-        msg.includes('ENOENT') ||
-        msg.includes('ECONNREFUSED') ||
-        msg.includes('connect: connection refused') ||
-        msg.includes('connect: no such file')
-
-      if (isSocketError) {
+      if (isSocketUnavailableError(msg)) {
         throw new Error(
           'Tailscale daemon is not running. ' +
             'Start the service first, then use Logout to log out.',
@@ -106,19 +93,19 @@ export const disconnect = sdk.Action.withoutInput(
       const store = await storeJson.read().once()
       if (store?.authKey) {
         await storeJson.write(effects, { ...store, authKey: null })
-        console.info('[disconnect] Cleared staged auth key from store.json.')
+        console.info('[logout] Cleared staged auth key from store.json.')
       }
     } catch (e) {
-      console.warn('[disconnect] Could not clear auth key from store.json:', e)
+      console.warn('[logout] Could not clear auth key from store.json:', e)
     }
 
     // Clear the cached IP/DNS — they are no longer valid once the node is
     // removed from the tailnet.
     try {
       await statusJson.write(effects, { ip: '', dnsName: '' })
-      console.info('[disconnect] Cleared status.json.')
+      console.info('[logout] Cleared status.json.')
     } catch (e) {
-      console.warn('[disconnect] Could not clear status.json:', e)
+      console.warn('[logout] Could not clear status.json:', e)
     }
 
     return {

@@ -24,10 +24,13 @@ tailscale-startos/
 │   ├── main.ts               # Daemon definitions, health checks, serve restoration
 │   ├── sdk.ts                # Package-specific SDK instance
 │   ├── constants.ts          # UI_PORT = 8080
-│   ├── utils.ts              # assignPort, isPortAvailable, parseTailscaleIp, parseDnsName
+│   ├── utils.ts              # assignPort, isPortAvailable, parseTailscaleIp, parseDnsName, isSocketUnavailableError
 │   ├── serves.ts             # applyServicesConfig() — reset and reapply all serves
 │   ├── actions/
 │   │   ├── index.ts          # Actions.of() registration
+│   │   ├── login.ts          # Login action (headless auth key or web UI)
+│   │   ├── setMachineName.ts # Set Machine Name action (hostname / MagicDNS)
+│   │   ├── logout.ts         # Logout action (log out of tailnet + clear state)
 │   │   ├── addServe.ts       # Add Serve action (URL plugin table action)
 │   │   └── removeServe.ts    # Remove Serve action (URL plugin table action)
 │   ├── plugin/

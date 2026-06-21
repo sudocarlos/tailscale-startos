@@ -75,6 +75,23 @@ export function isPortAvailable(
 }
 
 /**
+ * Returns true if the error message indicates the tailscaled socket is
+ * unavailable (service stopped, container not running, etc.).
+ *
+ * Matches the same broad set of patterns used in login.ts so that any
+ * socket-related message is classified consistently across all actions.
+ */
+export function isSocketUnavailableError(msg: string): boolean {
+  return (
+    msg.includes('no such file') ||
+    msg.includes('ENOENT') ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('connect') ||
+    msg.includes('socket')
+  )
+}
+
+/**
  * Parses the output of `tailscale ip -4` to a trimmed IPv4 string.
  */
 export function parseTailscaleIp(stdout: string): string {
