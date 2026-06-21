@@ -11,7 +11,7 @@ export const disconnect = sdk.Action.withoutInput(
 
   // metadata
   async () => ({
-    name: 'Disconnect / Reset',
+    name: 'Logout',
     description:
       'Log out of Tailscale, remove this node from your tailnet, and clear ' +
       'all persisted auth state. Use the Login action to reconnect with a new auth key.',
@@ -66,7 +66,7 @@ export const disconnect = sdk.Action.withoutInput(
             if (isSocketError) {
               throw new Error(
                 'Tailscale daemon is not running. ' +
-                  'Start the service first, then use Disconnect / Reset to log out.',
+                  'Start the service first, then use Logout to log out.',
               )
             }
 
@@ -91,7 +91,7 @@ export const disconnect = sdk.Action.withoutInput(
       if (isSocketError) {
         throw new Error(
           'Tailscale daemon is not running. ' +
-            'Start the service first, then use Disconnect / Reset to log out.',
+            'Start the service first, then use Logout to log out.',
         )
       }
 
