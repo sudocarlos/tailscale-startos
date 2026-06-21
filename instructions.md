@@ -6,7 +6,7 @@
 
 ## What you get on StartOS
 
-Installing Tailscale joins your StartOS server to your [tailnet](https://tailscale.com/kb/1136/tailnet) — your private WireGuard® mesh network — and gives you a browser-based management UI. Once it's running, you can also share individual StartOS services over your tailnet by clicking **Add Serve** on their tiles in the Services panel.
+Installing Tailscale joins your StartOS server to your [tailnet](https://tailscale.com/kb/1136/tailnet) — your private WireGuard® mesh network — and gives you a browser-based management UI. Once it's running, you can also share individual StartOS services over your tailnet via **Add Serve**, or to the public internet via **Funnel**, on their tiles in the Services panel.
 
 ## Getting set up
 
@@ -31,9 +31,16 @@ The web interface is the standard Tailscale device UI running on your server. Us
 
 **Login** — authenticates the node using a [Tailscale auth key](https://tailscale.com/kb/1085/auth-keys) without opening a browser. Generate a key at <https://login.tailscale.com/admin/settings/keys>, paste it in, and run the action. Useful for headless setups or when you can't reach the web interface. Leave the field blank if you'd rather sign in through the web interface.
 
-### Sharing services over your tailnet
+### Sharing services
 
-After Tailscale is running, each installed service gains an **Add Serve** option. Click it to assign that service a port on your tailnet and make it reachable at `https://<machine-name>.tail1234.ts.net:<port>`. To stop sharing it, click **Remove Serve** on the same tile.
+After Tailscale is running, each installed service gains an **Add Serve** option. Click it to assign that service a port and make it reachable. You can choose between two modes:
+
+- **Serve** (default) — tailnet-only, accessible at `https://<machine-name>.tail1234.ts.net:<port>`. Any available port can be used.
+- **Funnel** — public internet, accessible at `https://<machine-name>.ts.net:<port>`. Ports 443, 8443, and 10000 only. Must be enabled in the [Tailscale admin console](https://login.tailscale.com/admin/settings/funnel).
+
+> **Security note:** Funnel makes your service visible to anyone on the internet. Only use it for services intended to be public.
+
+To stop sharing a service, click **Remove Serve** on the same tile.
 
 ## Limitations
 

@@ -14,7 +14,7 @@
 mesh network that connects your devices securely without port forwarding, static
 IPs, or complex firewall rules. Running Tailscale on StartOS joins your StartOS
 server to your tailnet, exposes the Tailscale device web interface, and lets you
-expose other StartOS services to your tailnet via `tailscale serve`.
+expose other StartOS services to your tailnet via `tailscale serve`, or to the public internet via `tailscale funnel`.
 
 ---
 
@@ -83,7 +83,7 @@ long as `tailscaled.state` is intact.
 4. Open the **Web Interface** from the StartOS UI.
 5. Log in with your Tailscale account to join the node to your tailnet.
 6. Optionally configure subnet routes, exit node, or Tailscale SSH from the web interface.
-7. Use the **Add Serve** tile action on any installed service to expose it on your tailnet.
+7. Use the **Add Serve** tile action on any installed service to expose it on your tailnet or the public internet.
 
 No auth key or pre-configuration is required beyond the machine name step.
 All other setup happens interactively through the Tailscale web interface.
@@ -106,7 +106,7 @@ All Tailscale configuration is managed through the **Tailscale web interface**
 | Exit node           | Web UI → This device → Exit node          |
 | Tailscale SSH       | Web UI → Settings → Tailscale SSH server  |
 | Logout / re-auth    | Web UI → Settings → Log out               |
-| Expose services     | URL plugin → Add Serve (tile action)      |
+| Expose services     | URL plugin → Add Serve (tile action, choose Serve or Funnel mode) |
 
 ### Daemon environment
 
@@ -207,11 +207,32 @@ These actions are exposed via the **URL plugin** (the "Add Serve" / "Remove Serv
 on service tiles in the StartOS UI).  They are not visible in the Actions panel directly.
 
 **Add Serve** assigns a tailnet port to a `(packageId, interfaceId)` pair and configures
-`tailscale serve` to proxy or forward traffic to that service.
+either `tailscale serve` (tailnet-only) or `tailscale funnel` (public internet) to proxy
+or forward traffic to that service.
+
+#### Mode selector
+
+Add Serve prompts you to choose a mode:
+
+| Mode     | Scope            | Allowed ports                       | CLI command        |
+| -------- | ---------------- | ----------------------------------- | ------------------ |
+| Serve    | Tailnet-private  | Any unreserved port (≥10001)        | `tailscale serve`  |
+| Funnel   | Public internet  | 443, 8443, 10000 only               | `tailscale funnel` |
+
+**Serve** (default) keeps traffic within your tailnet. **Funnel** makes the service
+accessible to anyone on the public internet at `https://<machine-name>.ts.net:<port>`.
+
+> **Warning:** Funnel exposes your service to the open internet, including bot traffic
+> and potential vulnerabilities. Only enable it for services that are designed to be
+> public. Funnel must also be enabled for your tailnet in the
+> [Tailscale admin console](https://login.tailscale.com/admin/settings/funnel).
+
+#### Serve mode (tailnet-only)
 
 - The assigned port starts at 10000 and increments by 1 above the current maximum.
 - **Custom port selection:** an optional port number can be supplied when clicking "Add Serve"
   to override the auto-assigned value.
+- Ports 80, 443, and 8080 are reserved by Tailscale and cannot be used for Serve entries.
 - Port assignments are stable: the same port is reused whenever "Add Serve" is clicked again
   for an entry that was previously removed (the mapping is preserved as a legacy sentinel).
 - Interface metadata (`hostId`, `scheme`, `internalPort`) is read from the URL plugin prefill
@@ -219,7 +240,7 @@ on service tiles in the StartOS UI).  They are not visible in the Actions panel 
 - The action is idempotent: if the entry already has a `hostId` recorded, it returns immediately.
   If the entry exists but has no `hostId` (legacy record), it is upgraded in place.
 
-**How it works internally:**
+**How it works internally (Serve):**
 
 The `scheme` cached from `addressInfo` determines the `tailscale serve` target format:
 
@@ -228,7 +249,25 @@ The `scheme` cached from `addressInfo` determines the `tailscale serve` target f
 - `scheme = null` / TCP — `tailscale serve --bg --tcp <port> tcp://<pkg>.startos:<internalPort>`
 - `packageId = 'startos'` — `tailscale serve --bg --https <port> https+insecure://startos.startos:443`
 
-Before re-applying, `tailscale serve reset` atomically replaces the entire configuration.
+#### Funnel mode (public internet)
+
+- Only ports **443**, **8443**, and **10000** are accepted (enforced by Tailscale upstream).
+- Auto-assignment priority: 443 → 8443 → 10000 (first unused port in that order).
+- Leaving the port field blank auto-assigns the first free funnel port.
+- A custom port can be specified; it must be one of the three allowed funnel ports and
+  must not be in use by another funnel entry.
+- An existing funnel entry's port is preserved when the action is re-run for the same entry.
+- The upstream target is always plain `http://` — Tailscale terminates TLS externally.
+- The URL plugin tile shows these entries as **Public** (as opposed to Serve's private label).
+
+**How it works internally (Funnel):**
+
+`tailscale funnel --bg --https=<port> http://<pkg>.startos:<internalPort>`
+
+Before re-applying, both `tailscale serve reset` and `tailscale funnel reset` are run
+to atomically replace the entire configuration. The funnel reset is intentionally
+non-fatal if it fails (e.g., Funnel is not enabled for the tailnet), while the serve
+reset failure is fatal.
 
 **Legacy upgrade path:** If you are upgrading from a prior version of this package,
 existing entries in `store.json` will be detected as legacy (no `hostId`).  The URL
@@ -329,23 +368,32 @@ daemons:
   - id: restore-serves   # oneshot; runs after tailscaled, blocks tailscale-web
     mechanism: |
       read startos/store.json once
-      tailscale serve reset
+      tailscale serve reset      (fatal on failure)
+      tailscale funnel reset     (non-fatal — logged as warning)
       for each non-legacy entry (hostId != ''):
-        scheme=http/ws:   tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>
-        scheme=https/wss: tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>
-        scheme=null/tcp:  tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
-        packageId=startos: tailscale serve --bg --https <port> https+insecure://startos.startos:443
+        if mode=funnel:
+          tailscale funnel --bg --https <port> http://<pkg>.startos:<internalPort>
+        elif scheme=http/ws:
+          tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>
+        elif scheme=https/wss:
+          tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>
+        elif scheme=null/tcp:
+          tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
+        packageId=startos:       (same logic; host='startos')
+
   - id: tailscale-web
     command: tailscale web --listen=0.0.0.0:8080
     health: port 8080 listening
     requires: [tailscaled, restore-serves]
 actions:
   - id: add-serve   # exposed via URL plugin table action
-    description: Assign a tailnet port and configure tailscale serve for a service interface
-    input: urlPluginMetadata { packageId, interfaceId, hostId, internalPort }
-    optional_input: port (number) — custom port override; defaults to auto-assign from 10000
+    description: Assign a tailnet port and configure tailscale serve or funnel for a service interface
+    input:
+      urlPluginMetadata { packageId, interfaceId, hostId, internalPort }
+      mode (select): 'serve' (tailnet-only, default) or 'funnel' (public internet, ports 443/8443/10000 only)
+    optional_input: port (number) — custom port override; serve defaults to auto-assign from 10000, funnel defaults to 443→8443→10000
     state: startos/store.json
-    schema: { packageId: { interfaceId: { port, hostId, scheme, internalPort } } }
+    schema: { packageId: { interfaceId: { port, hostId, scheme, internalPort, mode } } }
     idempotent: skip if hostId already stored; upgrade legacy sentinel (hostId='') in place
   - id: remove-serve   # exposed via URL plugin table action
     description: Remove a tailscale serve for a service interface
