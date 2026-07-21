@@ -154,7 +154,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              head: `feat/bump-tailscale-v${version}`,
+              head: `${context.repo.owner}:feat/bump-tailscale-v${version}`,
             });
             if (prs.length > 0) {
               core.info(`PR already exists for v${version}: #${prs[0].number}`);
