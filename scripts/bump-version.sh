@@ -111,7 +111,7 @@ for line in import_lines:
 
 # Ensure new var import exists
 if new_var not in import_map:
-    import_map[new_var] = f'./{new_ver}.0'
+    import_map[new_var] = f'./v{new_ver}.0'
 # Ensure old var import exists
 if old_var not in import_map:
     import_map[old_var] = f'./{old_ver}.0'
