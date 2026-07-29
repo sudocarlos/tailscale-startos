@@ -242,13 +242,23 @@ jobs:
               `> with highlights from the [changelog](https://tailscale.com/changelog), and verify the build before merging.`,
             ].join('\n');
 
-            const { data: pr } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `feat: bump Tailscale to v${version}`,
-              body,
-              head: `feat/bump-tailscale-v${version}`,
-              base: 'main',
-            });
+            try {
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `feat: bump Tailscale to v${version}`,
+                body,
+                head: `feat/bump-tailscale-v${version}`,
+                base: 'main',
+              });
 
-            core.info(`Created PR #${pr.number}: ${pr.html_url}`);
+              core.info(`Created PR #${pr.number}: ${pr.html_url}`);
+            } catch (error) {
+              const message = String(error?.message || '');
+              if (error?.status === 403 && message.includes('GitHub Actions is not permitted to create or approve pull requests')) {
+                core.warning('GitHub Actions cannot create pull requests in this repository configuration.');
+                core.info(`Create it manually: https://github.com/${context.repo.owner}/${context.repo.repo}/pull/new/feat/bump-tailscale-v${version}`);
+              } else {
+                throw error;
+              }
+            }
