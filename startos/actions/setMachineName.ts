@@ -1,5 +1,5 @@
 import { sdk } from '../sdk'
-import { storeJson } from '../fileModels/store.json'
+import { storeJson, writeStoreJson } from '../fileModels/store.json'
 
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
@@ -76,7 +76,7 @@ export const setMachineName = sdk.Action.withInput(
       authKey: null,
     }
 
-    await storeJson.write(effects, {
+    await writeStoreJson({
       ...storeData,
       machineName,
     })

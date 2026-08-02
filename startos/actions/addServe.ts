@@ -1,4 +1,8 @@
-import { servesShape, storeJson } from '../fileModels/store.json'
+import {
+  servesShape,
+  storeJson,
+  writeStoreJson,
+} from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
 import {
@@ -230,7 +234,7 @@ export const addServe = sdk.Action.withInput(
       },
     )
 
-    await storeJson.write(effects, { ...storeData, serves: updatedServes })
+    await writeStoreJson({ ...storeData, serves: updatedServes })
 
     // ── Result message ─────────────────────────────────────────────────────
     // Layer 3 warning: shown only when the user confirmed Funnel mode.

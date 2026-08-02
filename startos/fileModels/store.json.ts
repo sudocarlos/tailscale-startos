@@ -1,5 +1,6 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
+import { atomicWriteFile } from './atomicWrite'
 
 /**
  * Per-interface entry stored in store.json.
@@ -123,6 +124,8 @@ export const shape = z
 
 export type Store = z.infer<typeof currentShape>
 
+const PATH = sdk.volumes.startos.subpath('/store.json')
+
 export const storeJson = FileHelper.json(
   {
     base: sdk.volumes.startos,
@@ -130,3 +133,12 @@ export const storeJson = FileHelper.json(
   },
   shape,
 )
+
+/**
+ * Validates and atomically replaces store.json.  All writes must go through
+ * this rather than `storeJson.write` — see atomicWrite.ts for why.
+ */
+export async function writeStoreJson(data: Store): Promise<null> {
+  await atomicWriteFile(PATH, JSON.stringify(shape.parse(data), null, 2))
+  return null
+}

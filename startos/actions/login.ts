@@ -1,6 +1,6 @@
 import { sdk } from '../sdk'
-import { statusJson } from '../fileModels/status.json'
-import { storeJson } from '../fileModels/store.json'
+import { writeStatusJson } from '../fileModels/status.json'
+import { storeJson, writeStoreJson } from '../fileModels/store.json'
 import { parseTailscaleIp } from '../utils'
 
 const STATE_DIR = '/var/lib/tailscale'
@@ -65,7 +65,7 @@ export const getStarted = sdk.Action.withInput(
       serves: {},
       authKey: null,
     }
-    await storeJson.write(effects, { ...storeData, authKey })
+    await writeStoreJson({ ...storeData, authKey })
     console.info('[get-started] Auth key saved to store.json for next container start.')
 
     // Attempt an immediate headless login if the container is already running.
@@ -113,7 +113,7 @@ export const getStarted = sdk.Action.withInput(
             if (!isTransient) {
               try {
                 const s = (await storeJson.read().once()) ?? { ...storeData, authKey }
-                await storeJson.write(effects, { ...s, authKey: null })
+                await writeStoreJson({ ...s, authKey: null })
               } catch {}
             }
             throw new Error('tailscale login failed: ' + errText)
@@ -159,12 +159,12 @@ export const getStarted = sdk.Action.withInput(
                 const ip = parseTailscaleIp(ipResult.stdout.toString())
                 const rawDns = statusData.Self?.DNSName ?? ''
                 const dnsName = rawDns.endsWith('.') ? rawDns.slice(0, -1) : rawDns
-                await statusJson.write(effects, { ip, dnsName })
+                await writeStatusJson({ ip, dnsName })
                 // Clear the persisted key now that the node is Running so it
                 // is not re-applied via tailscale login on the next restart.
                 try {
                   const s = (await storeJson.read().once()) ?? { ...storeData, authKey }
-                  await storeJson.write(effects, { ...s, authKey: null })
+                  await writeStoreJson({ ...s, authKey: null })
                 } catch {}
                 console.info(
                   `[get-started] status.json updated: ip=${ip} dnsName=${dnsName}; authKey cleared`,

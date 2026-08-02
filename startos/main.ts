@@ -1,6 +1,6 @@
 import { sdk } from './sdk'
-import { statusJson } from './fileModels/status.json'
-import { storeJson } from './fileModels/store.json'
+import { statusJson, writeStatusJson } from './fileModels/status.json'
+import { storeJson, writeStoreJson } from './fileModels/store.json'
 import { parseTailscaleIp, parseDnsName } from './utils'
 import { applyServicesConfig } from './serves'
 import { UI_PORT } from './constants'
@@ -134,7 +134,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
                 const dnsName = parseDnsName(result.stdout.toString())
                 const prev = await statusJson.read().once()
                 if (!prev || prev.ip !== ip || prev.dnsName !== dnsName) {
-                  await statusJson.write(effects, { ip, dnsName })
+                  await writeStatusJson({ ip, dnsName })
                 }
               }
             } catch (e) {
@@ -149,7 +149,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             try {
               const currentStore = (await storeJson.read().once()) ?? initialStore
               if (currentStore.authKey) {
-                await storeJson.write(effects, { ...currentStore, authKey: null })
+                await writeStoreJson({ ...currentStore, authKey: null })
                 console.info('[main] Auth key consumed and cleared from store.json.')
               }
             } catch (e) {

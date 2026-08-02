@@ -1,4 +1,8 @@
-import { servesShape, storeJson } from '../fileModels/store.json'
+import {
+  servesShape,
+  storeJson,
+  writeStoreJson,
+} from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
 import { normalizePackageId } from '../utils'
@@ -90,6 +94,6 @@ export const removeServe = sdk.Action.withInput(
       },
     )
 
-    await storeJson.write(effects, { ...storeData, serves: updatedServes })
+    await writeStoreJson({ ...storeData, serves: updatedServes })
   },
 )

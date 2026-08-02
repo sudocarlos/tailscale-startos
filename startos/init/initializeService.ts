@@ -1,5 +1,5 @@
 import { sdk } from '../sdk'
-import { storeJson } from '../fileModels/store.json'
+import { writeStoreJson } from '../fileModels/store.json'
 import { setMachineName } from '../actions/setMachineName'
 
 export const initializeService = sdk.setupOnInit(async (effects, kind) => {
@@ -7,7 +7,7 @@ export const initializeService = sdk.setupOnInit(async (effects, kind) => {
 
   // Write initial store defaults so the machine name action pre-fills correctly
   // and the startup oneshot has a well-typed value to read.
-  await storeJson.write(effects, {
+  await writeStoreJson({
     machineName: 'startos',
     hostnameSet: false,
     serves: {},
