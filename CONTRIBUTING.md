@@ -158,4 +158,4 @@ This project follows [Conventional Commits](https://www.conventionalcommits.org/
 <type>[optional scope]: <description>
 ```
 
-Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`
+Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `style`, `build`, `ci`
