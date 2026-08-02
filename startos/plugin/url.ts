@@ -59,11 +59,16 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
           internalPort = 80
         } else {
           try {
-            const iface = await sdk.serviceInterface
-              .get(effects, { id: interfaceId, packageId })
+            const host = await sdk.host
+              .get(effects, { hostId, packageId })
               .once()
+            const iface = host
+              ? Object.values(host.bindings)
+                  .flatMap((b) => Object.values(b.interfaces))
+                  .find((i) => i.id === interfaceId)
+              : null
 
-            if (!iface || !iface.addressInfo) {
+            if (!iface) {
               console.warn(
                 `[plugin/url] interface ${packageId}/${interfaceId} not found (package uninstalled?), skipping`,
               )
@@ -96,9 +101,9 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
         await sdk.plugin.url
           .exportUrl(effects, {
             hostnameInfo: {
-              // StarOS self-target uses packageId=null in platform terms;
-              // other services use their string packageId.
-              packageId: packageId === 'startos' ? null : packageId,
+              // StartOS expects the literal id 'start_os' for its own UI
+              // host; other services use their string packageId.
+              packageId: packageId === 'startos' ? 'start_os' : packageId,
               hostId,
               internalPort,
               ssl,

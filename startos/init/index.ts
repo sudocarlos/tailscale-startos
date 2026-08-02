@@ -7,10 +7,10 @@ import { actions } from '../actions'
 import { getStarted } from '../actions/login'
 import { registerUrlPlugin, exportUrls } from '../plugin/url'
 import { initializeService } from './initializeService'
-import type { Effects } from '@start9labs/start-sdk/base/lib/types'
+import type { T } from '@start9labs/start-sdk'
 
 async function scheduleGetStarted(
-  effects: Effects,
+  effects: T.Effects,
   kind: 'install' | 'update' | 'restore' | null,
 ): Promise<void> {
   if (kind !== 'install') return

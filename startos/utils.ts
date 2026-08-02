@@ -75,6 +75,16 @@ export function isPortAvailable(
 }
 
 /**
+ * The canonical store key for the StartOS self-target (the StartOS UI).
+ * Older platforms pass `null` for it in URL plugin metadata; StartOS 0.4
+ * passes the literal 'start_os'.  The store keeps 'startos' for backwards
+ * compatibility with entries written by older versions of this package.
+ */
+export function normalizePackageId(raw: string | null | undefined): string {
+  return raw === 'start_os' || raw == null || raw === '' ? 'startos' : raw
+}
+
+/**
  * Parses the output of `tailscale ip -4` to a trimmed IPv4 string.
  */
 export function parseTailscaleIp(stdout: string): string {

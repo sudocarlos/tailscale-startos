@@ -1,6 +1,7 @@
 import { servesShape, storeJson } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
 import { sdk } from '../sdk'
+import { normalizePackageId } from '../utils'
 import { z } from '@start9labs/start-sdk'
 
 const STATE_DIR = '/var/lib/tailscale'
@@ -10,7 +11,7 @@ const { InputSpec, Value } = sdk
 const inputSpec = InputSpec.of({
   urlPluginMetadata: Value.hidden<{
     interfaceId: string
-    packageId: string | null
+    packageId: string
     hostId: string
     internalPort: number
     ssl: boolean
@@ -44,7 +45,7 @@ export const removeServe = sdk.Action.withInput(
   // execution
   async ({ effects, input }) => {
     const { packageId: rawPkgId, interfaceId } = input.urlPluginMetadata
-    const packageId = rawPkgId ?? 'startos'
+    const packageId = normalizePackageId(rawPkgId)
 
     // Use .once() to avoid "write after const" error
     const storeData = (await storeJson.read().once()) ?? {

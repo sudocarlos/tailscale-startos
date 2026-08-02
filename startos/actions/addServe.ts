@@ -7,6 +7,7 @@ import {
   assertFunnelPort,
   FUNNEL_ALLOWED_PORTS,
   isPortAvailable,
+  normalizePackageId,
   BLOCKED_PORTS,
 } from '../utils'
 import { z } from '@start9labs/start-sdk'
@@ -86,7 +87,7 @@ export const addServe = sdk.Action.withInput(
   async ({ effects, input }) => {
     const { packageId: rawPkgId, interfaceId, hostId, internalPort } =
       input.urlPluginMetadata
-    const packageId = rawPkgId ?? 'startos'
+    const packageId = normalizePackageId(rawPkgId)
     const mode: 'serve' | 'funnel' = input.mode ?? 'serve'
 
     // Use .once() to avoid "write after const" error
@@ -115,9 +116,12 @@ export const addServe = sdk.Action.withInput(
       scheme = 'http'
       resolvedInternalPort = 80
     } else {
-      const iface = await sdk.serviceInterface
-        .get(effects, { id: interfaceId, packageId })
-        .once()
+      const host = await sdk.host.get(effects, { hostId, packageId }).once()
+      const iface = host
+        ? Object.values(host.bindings)
+            .flatMap((b) => Object.values(b.interfaces))
+            .find((i) => i.id === interfaceId)
+        : null
 
       console.info(
         `[addServe] ${packageId}/${interfaceId} iface:`,
