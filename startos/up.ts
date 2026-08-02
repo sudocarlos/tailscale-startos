@@ -188,6 +188,13 @@ export async function runTailscaleUp(
  * Polls `tailscale status --json` until BackendState is Running.
  *
  * Polls frequently (default 1s) so login completion is observed promptly.
+ * Running must persist for `stablePolls` consecutive reads (default 3)
+ * before it is trusted: BackendState flickers through a transient Running
+ * for under a second during re-authentication (e.g. --force-reauth after a
+ * control-server change) before dropping back to NeedsLogin, and acting on
+ * the flicker would apply serves against an unauthenticated daemon
+ * (`zero serverNoiseKey` failures).
+ *
  * Bails out early when the daemon socket stays unreachable (service
  * stopped) rather than waiting out the full timeout. When interactive auth
  * is pending, each new AuthURL is passed to onAuthUrl as it appears.
@@ -197,23 +204,33 @@ export async function pollUntilRunning(
   opts: {
     intervalMs?: number
     timeoutMs?: number
+    stablePolls?: number
     onAuthUrl?: (url: string) => void
   } = {},
 ): Promise<{ running: boolean; authUrl: string }> {
   const intervalMs = opts.intervalMs ?? 1_000
   const timeoutMs = opts.timeoutMs ?? 90_000
+  const stablePolls = opts.stablePolls ?? 3
   const deadline = Date.now() + timeoutMs
 
   let authUrl = ''
   let misses = 0
+  let runningStreak = 0
   while (Date.now() < deadline) {
     const status = await getNodeStatus(sub)
     if (status === null) {
       // Daemon socket unreachable (service stopped) — no point waiting.
+      runningStreak = 0
       if (++misses >= 3) return { running: false, authUrl: '' }
     } else {
       misses = 0
-      if (status.state === 'Running') return { running: true, authUrl: '' }
+      if (status.state === 'Running') {
+        if (++runningStreak >= stablePolls) {
+          return { running: true, authUrl: '' }
+        }
+      } else {
+        runningStreak = 0
+      }
       if (status.authUrl && status.authUrl !== authUrl) {
         authUrl = status.authUrl
         opts.onAuthUrl?.(authUrl)

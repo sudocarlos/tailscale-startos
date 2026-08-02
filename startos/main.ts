@@ -28,16 +28,21 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // keeps reporting state.
   let upTriggered = false
 
-  // BackendState seen on the previous poll, used to fire the post-login
-  // converge on every transition into Running — not just the first one
-  // this start cycle. A mid-cycle re-authentication (e.g. the user changed
-  // the control server) also restores serves and refreshes status.json.
-  let prevBackendState = ''
+  // Consecutive polls reporting BackendState=Running. BackendState
+  // flickers through a transient Running for under a second during
+  // re-authentication (e.g. --force-reauth after a control-server change)
+  // before dropping back to NeedsLogin — the post-login converge fires only
+  // once Running has persisted for two consecutive polls, so serves are
+  // never applied against an unauthenticated daemon. Reaching the streak
+  // again after the state leaves Running counts as a new transition, so a
+  // mid-cycle re-authentication also restores serves and refreshes
+  // status.json.
+  let runningStreak = 0
 
-  // Set on every transition into Running and cleared once the post-login
-  // converge succeeds. The converge is retried on each poll while pending
-  // because the daemon's netMap can lag the Running transition, causing
-  // transient `tailscale serve` failures right after login.
+  // Set on every confirmed transition into Running and cleared once the
+  // post-login converge succeeds. The converge is retried on each poll
+  // while pending because the daemon's netMap can lag the Running state,
+  // causing transient `tailscale serve` failures right after login.
   let convergePending = false
 
   return sdk.Daemons.of(effects)
@@ -98,10 +103,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
             }
           }
 
-          if (backendState === 'Running' && prevBackendState !== 'Running') {
-            convergePending = true
+          if (backendState === 'Running') {
+            runningStreak++
+            if (runningStreak === 2) convergePending = true
+          } else {
+            runningStreak = 0
           }
-          prevBackendState = backendState
 
           if (backendState === 'Running') {
             if (convergePending) {
