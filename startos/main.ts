@@ -34,6 +34,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // the control server) also restores serves and refreshes status.json.
   let prevBackendState = ''
 
+  // Set on every transition into Running and cleared once the post-login
+  // converge succeeds. The converge is retried on each poll while pending
+  // because the daemon's netMap can lag the Running transition, causing
+  // transient `tailscale serve` failures right after login.
+  let convergePending = false
+
   return sdk.Daemons.of(effects)
     .addDaemon('tailscaled', {
       subcontainer,
@@ -92,15 +98,24 @@ export const main = sdk.setupMain(async ({ effects }) => {
             }
           }
 
+          if (backendState === 'Running' && prevBackendState !== 'Running') {
+            convergePending = true
+          }
+          prevBackendState = backendState
+
           if (backendState === 'Running') {
-            if (prevBackendState !== 'Running') {
-              // Transition into Running: re-apply serves, refresh status.json
+            if (convergePending) {
+              // Post-login converge: re-apply serves, refresh status.json
               // (updates serve URLs in Interfaces), clear any consumed key.
               try {
                 const store = (await storeJson.read().once()) ?? defaultStore
                 await convergeAfterLogin(subcontainer, store)
+                convergePending = false
               } catch (e) {
-                console.error('[main] post-login converge failed:', e)
+                console.error(
+                  '[main] post-login converge failed (will retry):',
+                  e,
+                )
               }
             } else {
               // Steady state: keep status.json fresh — the MagicDNS name can
@@ -112,7 +127,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
               }
             }
           }
-          prevBackendState = backendState
 
           // Surface a pending auth URL in the health message and the logs so
           // the user can complete login in a browser.
