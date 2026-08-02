@@ -2,8 +2,10 @@ import {
   servesShape,
   storeJson,
   writeStoreJson,
+  defaultStore,
 } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
+import { runTailscaleUp, pollUntilRunning } from '../up'
 import { sdk } from '../sdk'
 import {
   assignFunnelPort,
@@ -95,14 +97,18 @@ export const addServe = sdk.Action.withInput(
     const mode: 'serve' | 'funnel' = input.mode ?? 'serve'
 
     // Use .once() to avoid "write after const" error
-    const storeData = (await storeJson.read().once()) ?? {
-      machineName: 'startos',
-      hostnameSet: false,
-      serves: {},
-      authKey: null,
-      controlServer: null,
-    }
+    const storeData = (await storeJson.read().once()) ?? defaultStore
     const serves: z.infer<typeof servesShape> = storeData.serves
+
+    // Funnel is a Tailscale-cloud-only feature — reject it outright when a
+    // custom control server (e.g. Headscale) is configured.
+    if (mode === 'funnel' && storeData.controlServer) {
+      throw new Error(
+        'Funnel requires the official Tailscale control plane and is unavailable ' +
+          'with a custom control server. Choose Serve mode instead, or clear the ' +
+          'Control Server setting.',
+      )
+    }
 
     const existing = serves[packageId]?.[interfaceId]
 
@@ -225,12 +231,27 @@ export const addServe = sdk.Action.withInput(
       readonly: false,
     })
 
+    let applied = true
     await sdk.SubContainer.withTemp(
       effects,
       { imageId: 'tailscale', sharedRun: true },
       mounts,
       'tailscale-serve-add',
       async (sub) => {
+        // Converge the daemon first so a pending login is driven forward;
+        // serves can only be applied once the client is logged in.
+        try {
+          await runTailscaleUp(sub, storeData)
+        } catch (e) {
+          console.error('[addServe] tailscale up failed:', e)
+        }
+        const { running } = await pollUntilRunning(sub, {
+          timeoutMs: 10_000,
+        })
+        if (!running) {
+          applied = false
+          return
+        }
         await applyServicesConfig(
           sub,
           updatedServes,
@@ -239,7 +260,22 @@ export const addServe = sdk.Action.withInput(
       },
     )
 
+    // Persist after applying when connected (a failed apply keeps the old
+    // store); when not logged in the entry is saved now and applied
+    // automatically by the next post-login converge.
     await writeStoreJson({ ...storeData, serves: updatedServes })
+
+    if (!applied) {
+      return {
+        version: '1' as const,
+        title: 'Serve Saved',
+        message:
+          'Tailscale is not logged in yet — this serve is saved and will be ' +
+          'applied automatically once the node connects. Check the Tailscale ' +
+          'Daemon health message for the login link.',
+        result: null,
+      }
+    }
 
     // ── Result message ─────────────────────────────────────────────────────
     // Layer 3 warning: shown only when the user confirmed Funnel mode.

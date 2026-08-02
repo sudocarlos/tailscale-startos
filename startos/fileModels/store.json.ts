@@ -85,9 +85,10 @@ export const servesShape = z.record(
  *   'startos' and is set by the user via the Set Machine Name action before
  *   the service starts for the first time.
  *
- * `hostnameSet` — true once the startup oneshot has successfully applied
- *   the machine name via `tailscale set --hostname`.  Prevents redundant
- *   re-application on every restart after the initial set.
+ * `hostnameSet` — legacy flag retained for schema compatibility with
+ *   stores written by older package versions.  The machine name is now
+ *   applied via `tailscale up --hostname` on every start and by the
+ *   Machine Name action, so no bookkeeping flag is needed.
  *
  * `serves` — the per-package/interface serve port-mapping table (the entire
  *   former top-level shape, now nested).

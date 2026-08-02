@@ -2,8 +2,10 @@ import {
   servesShape,
   storeJson,
   writeStoreJson,
+  defaultStore,
 } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
+import { runTailscaleUp, pollUntilRunning } from '../up'
 import { sdk } from '../sdk'
 import { normalizePackageId } from '../utils'
 import { z } from '@start9labs/start-sdk'
@@ -52,13 +54,7 @@ export const removeServe = sdk.Action.withInput(
     const packageId = normalizePackageId(rawPkgId)
 
     // Use .once() to avoid "write after const" error
-    const storeData = (await storeJson.read().once()) ?? {
-      machineName: 'startos',
-      hostnameSet: false,
-      serves: {},
-      authKey: null,
-      controlServer: null,
-    }
+    const storeData = (await storeJson.read().once()) ?? defaultStore
     const serves: z.infer<typeof servesShape> = storeData.serves
 
     if (serves[packageId]?.[interfaceId] === undefined) {
@@ -85,12 +81,27 @@ export const removeServe = sdk.Action.withInput(
       readonly: false,
     })
 
+    let applied = true
     await sdk.SubContainer.withTemp(
       effects,
       { imageId: 'tailscale', sharedRun: true },
       mounts,
       'tailscale-serve-remove',
       async (sub) => {
+        // Converge the daemon first so a pending login is driven forward;
+        // serves can only be removed once the client is logged in.
+        try {
+          await runTailscaleUp(sub, storeData)
+        } catch (e) {
+          console.error('[removeServe] tailscale up failed:', e)
+        }
+        const { running } = await pollUntilRunning(sub, {
+          timeoutMs: 10_000,
+        })
+        if (!running) {
+          applied = false
+          return
+        }
         await applyServicesConfig(
           sub,
           updatedServes,
@@ -100,5 +111,17 @@ export const removeServe = sdk.Action.withInput(
     )
 
     await writeStoreJson({ ...storeData, serves: updatedServes })
+
+    if (!applied) {
+      return {
+        version: '1' as const,
+        title: 'Serve Removed',
+        message:
+          'The serve entry was removed. Tailscale is not logged in, so the ' +
+          'live serve state will be updated automatically once the node ' +
+          'connects.',
+        result: null,
+      }
+    }
   },
 )
