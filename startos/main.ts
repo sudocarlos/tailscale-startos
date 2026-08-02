@@ -154,6 +154,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
           }
         },
         gracePeriod: 10_000,
+        // Poll frequently (2s instead of the 30s default) so login
+        // completion, AuthURL surfacing, and the post-login converge are
+        // all observed promptly. `tailscale status` is a cheap local call.
+        trigger: sdk.trigger.cooldownTrigger(2_000),
       },
       requires: [],
     })
