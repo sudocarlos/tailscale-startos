@@ -423,7 +423,7 @@ daemons:
     health: tailscale status --json (socket responsive; pending AuthURL shown in the message)
     on_start: |
       once per start cycle (from store.json):
-        tailscale up --hostname=<machineName> --login-server=<controlServer|''> [--auth-key=<key>]
+        tailscale up --hostname=<machineName> --login-server=<controlServer|default> [--auth-key=<key>]
         (retried once with --force-reauth when the daemon demands re-authentication)
       on every transition into the logged-in state (Running, no AuthURL, no
       login-state health warning):
@@ -467,7 +467,7 @@ actions:
     input: machineName (string, required, default 'startos') — 1–63 chars, lowercase letters/numbers/hyphens only
     behavior: |
       write machineName to startos/store.json
-      tailscale up --hostname=<name> --login-server=<controlServer|''> (applies live, any login state)
+      tailscale up --hostname=<name> --login-server=<controlServer|default> (applies live, any login state)
       poll status until logged in, then re-apply serves and refresh status.json
       if daemon stopped: startup ready-check applies the name on next start
   - id: set-control-server   # visible in the Actions panel
@@ -476,7 +476,7 @@ actions:
     input: controlServer (string, optional) — http(s) URL
     behavior: |
       write controlServer to startos/store.json and clear any stored authKey
-      tailscale up --hostname=<name> --login-server=<url|''> (live; retried with
+      tailscale up --hostname=<name> --login-server=<url|default> (live; retried with
         --force-reauth when the node was logged in to a different plane)
       poll status until logged in: headless with a key, otherwise return the
         pending AuthURL for browser login; serves re-apply automatically
@@ -486,7 +486,7 @@ actions:
     input: authKey (string, optional) — tskey-auth-... from admin console, or Headscale preauth key; leave blank for interactive login
     behavior: |
       always save authKey to startos/store.json when provided
-      tailscale up --hostname=<name> --login-server=<controlServer|''> [--auth-key=<key>]
+      tailscale up --hostname=<name> --login-server=<controlServer|default> [--auth-key=<key>]
       poll status until logged in, then re-apply serves, refresh status.json,
         and clear the consumed authKey from the store
       if authKey blank: return the pending AuthURL for browser login

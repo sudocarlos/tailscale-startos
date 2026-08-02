@@ -6,6 +6,24 @@ import { parseTailscaleIp, parseDnsName } from './utils'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
 /**
+ * The default Tailscale control plane, passed explicitly as --login-server
+ * when no custom control server is configured.
+ *
+ * Why not an empty string: after any successful login, tailscaled persists
+ * ControlURL explicitly (as this URL) so that future `tailscale up` runs
+ * check for accidental setting reverts, and the CLI's
+ * IsLoginServerSynonym("") is false — so `--login-server=""` against a
+ * logged-in node counts as a control-server change and fails with "can't
+ * change --login-server without --force-reauth", which would force a
+ * spurious re-authentication (and a new node key) on every converge.
+ * Passing the default URL explicitly is what the CLI itself does when the
+ * flag is omitted, so `cur == new` on the default plane and no re-auth is
+ * triggered; a genuine change (custom server set or cleared) still fails
+ * and is retried with --force-reauth as before.
+ */
+const DEFAULT_CONTROL_URL = 'https://controlplane.tailscale.com'
+
+/**
  * Minimal subcontainer surface the helpers need — structurally compatible
  * with the daemon's own subcontainer and the temporary subcontainers
  * actions receive from sdk.SubContainer.withTemp.
@@ -130,12 +148,13 @@ export function isLoggedIn(status: NodeStatus): boolean {
  * Converges the daemon to the stored configuration with a single
  * `tailscale up` invocation:
  *
- *   tailscale up --hostname=<machineName> --login-server=<controlServer|''> [--auth-key=<key>]
+ *   tailscale up --hostname=<machineName> --login-server=<controlServer|default> [--auth-key=<key>]
  *
  * - `--hostname` always carries the configured machine name; `--login-server`
- *   always carries the configured control server, or an empty string to
- *   reset to the default Tailscale control plane (`tailscale up` flags are
- *   not persisted between runs, so every run passes the complete set).
+ *   always carries the configured control server, or the explicit default
+ *   control plane URL when none is configured (see DEFAULT_CONTROL_URL for
+ *   why an empty string must not be used). `tailscale up` flags are not
+ *   persisted between runs, so every run passes the complete set.
  * - `--auth-key` is included only when a key is configured AND the node is
  *   not already logged in (re-authenticating a healthy node with a possibly
  *   single-use key is wasteful and risks losing the session if the key is
@@ -175,7 +194,7 @@ export async function runTailscaleUp(
     const env: Record<string, string> = {
       TS_SOCKET: SOCKET,
       TS_HOSTNAME: store.machineName,
-      TS_LOGIN_SERVER: store.controlServer ?? '',
+      TS_LOGIN_SERVER: store.controlServer ?? DEFAULT_CONTROL_URL,
     }
     let cmd =
       'tailscale --socket="$TS_SOCKET" up' +
@@ -407,9 +426,13 @@ export async function nudgePeerPaths(
           target.ip,
         ])
         const out = result.stdout.toString().trim().split('\n')[0]
+        // Success is read from stdout, not the exit code: `tailscale ping`
+        // that only reaches the peer via DERP can exit non-zero despite
+        // printing a pong.
+        const pong = /pong from /.test(out)
         console.info(
-          result.exitCode === 0
-            ? `[nudge] pong from ${target.hostName} (${target.ip}): ${out}`
+          pong
+            ? `[nudge] ${out}`
             : `[nudge] no reply from ${target.hostName} (${target.ip}): ${
                 out || result.stderr.toString().trim()
               }`,

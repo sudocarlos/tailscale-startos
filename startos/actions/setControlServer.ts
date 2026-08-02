@@ -133,9 +133,9 @@ export const setControlServer = sdk.Action.withInput(
         mounts,
         'tailscale-set-control-server',
         async (sub) => {
-          // `tailscale up --login-server=<url|''>` converges the daemon live;
-          // runTailscaleUp retries with --force-reauth when the daemon demands
-          // re-authentication for the plane switch. No logout, no restart.
+          // `tailscale up --login-server=<url|default>` converges the daemon
+          // live; runTailscaleUp retries with --force-reauth when the daemon
+          // demands re-authentication for the plane switch. No logout, no restart.
           try {
             await runTailscaleUp(sub, store)
           } catch (e) {
