@@ -1,8 +1,10 @@
 import { sdk } from './sdk'
-import { statusJson, writeStatusJson } from './fileModels/status.json'
-import { storeJson, writeStoreJson } from './fileModels/store.json'
-import { parseTailscaleIp, parseDnsName } from './utils'
-import { applyServicesConfig } from './serves'
+import { storeJson, defaultStore } from './fileModels/store.json'
+import {
+  runTailscaleUp,
+  convergeAfterLogin,
+  persistNodeStatus,
+} from './up'
 import { UI_PORT } from './constants'
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
@@ -24,26 +26,17 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'tailscale-sub',
   )
 
-  // Read any pending auth key saved by the Get Started action while the
-  // container was stopped.  If present, it is applied via `tailscale login`
-  // once the daemon socket is ready and BackendState is NeedsLogin.
-  const initialStore = (await storeJson.read().once()) ?? {
-    machineName: 'startos',
-    hostnameSet: false,
-    serves: {},
-    authKey: null,
-    controlServer: null,
-  }
-  const pendingAuthKey = initialStore.authKey ?? null
-  if (pendingAuthKey) {
-    console.info('[main] Pending auth key found; will apply via tailscale login once daemon is ready.')
-  } else {
-    console.info('[main] No pending auth key in store.')
-  }
+  // Whether the daemon has been converged to the stored config for this
+  // start cycle. A failed `tailscale up` (e.g. rejected auth key) is not
+  // retried until the next start — the error is logged and the ready check
+  // keeps reporting state.
+  let upTriggered = false
 
-  // Tracks whether we have already triggered the headless login for this
-  // start cycle so the ready-check poll doesn't re-run it on every tick.
-  let authKeyApplied = false
+  // BackendState seen on the previous poll, used to fire the post-login
+  // converge on every transition into Running — not just the first one
+  // this start cycle. A mid-cycle re-authentication (e.g. the user changed
+  // the control server) also restores serves and refreshes status.json.
+  let prevBackendState = ''
 
   return sdk.Daemons.of(effects)
     .addDaemon('tailscaled', {
@@ -72,13 +65,11 @@ export const main = sdk.setupMain(async ({ effects }) => {
             }
           }
 
-          // Socket is responsive. Parse state for informational purposes and
-          // to conditionally persist IP/DNS (only available once Running).
-          // BackendState is "NoState" | "NeedsLogin" | "NeedsRoutineAuth" |
-          // "Stopped" | "Starting" | "Running".
-          // We do NOT block on Running here — the web UI must be reachable in
-          // NeedsLogin so the user can authenticate on a fresh install.
-          let statusData: { BackendState?: string; Self?: { DNSName?: string } }
+          // Socket is responsive. BackendState is "NoState" | "NeedsLogin" |
+          // "NeedsRoutineAuth" | "Stopped" | "Starting" | "Running".
+          // We do NOT block on Running here — the web UI must be reachable
+          // in NeedsLogin so the user can authenticate on a fresh install.
+          let statusData: { BackendState?: string; AuthURL?: string }
           try {
             statusData = JSON.parse(result.stdout.toString().trim())
           } catch {
@@ -86,190 +77,68 @@ export const main = sdk.setupMain(async ({ effects }) => {
           }
 
           const backendState = statusData.BackendState ?? 'unknown'
+          const authUrl = statusData.AuthURL ?? ''
           console.info(`[tailscaled] BackendState: ${backendState}`)
 
-          // Apply a pending auth key as soon as the daemon reaches NeedsLogin.
-          // Run only once per start cycle to avoid re-triggering on every poll.
-          if (pendingAuthKey && !authKeyApplied && backendState === 'NeedsLogin') {
-            authKeyApplied = true
-            console.info('[main] Applying pending auth key via tailscale login...')
+          // Converge the daemon to the stored config once per start cycle:
+          // `tailscale up --hostname --login-server [--auth-key]`. Applies
+          // hostname and login-server prefs whether or not the node is
+          // logged in, and authenticates headlessly when a key is pending.
+          // With no key and no session it starts an interactive login whose
+          // AuthURL is surfaced in the health message below.
+          if (!upTriggered) {
+            upTriggered = true
             try {
-              const loginResult = await subcontainer.exec(
-                ['sh', '-c', 'tailscale --socket="$TS_SOCKET" login --auth-key="$TS_AUTHKEY"'],
-                { env: { TS_SOCKET: SOCKET, TS_AUTHKEY: pendingAuthKey } },
-              )
-              if (loginResult.exitCode !== 0) {
-                console.error(
-                  '[main] tailscale login failed: ' +
-                    (loginResult.stderr?.toString().trim() ||
-                      loginResult.stdout?.toString().trim() ||
-                      `exit code ${loginResult.exitCode}`),
-                )
-              } else {
-                console.info('[main] tailscale login succeeded.')
-              }
+              const store = (await storeJson.read().once()) ?? defaultStore
+              await runTailscaleUp(subcontainer, store)
             } catch (e) {
-              console.error('[main] tailscale login threw:', e)
+              console.error('[main] tailscale up failed:', e)
             }
           }
 
           if (backendState === 'Running') {
-            // Persist IP and DNS name once the node is fully connected.
-            // Only write when the values actually change. This ready check is
-            // polled continuously, and writing on every poll fires fs.watch
-            // events on status.json. Each event causes the SDK's FileHelper
-            // reactive `produce` loop to register a new abort listener on the
-            // parent AbortSignal of any active `.const()` read (notably the
-            // URL plugin's `setupExportedUrls` handler), eventually exceeding
-            // Node's default MaxListeners=10 and emitting a spurious warning.
-            // Skipping no-op writes eliminates the cause at the source.
-            try {
-              const ipResult = await subcontainer.exec([
-                'tailscale',
-                '--socket=' + SOCKET,
-                'ip',
-                '-4',
-              ])
-              if (ipResult.exitCode === 0) {
-                const ip = parseTailscaleIp(ipResult.stdout.toString())
-                const dnsName = parseDnsName(result.stdout.toString())
-                const prev = await statusJson.read().once()
-                if (!prev || prev.ip !== ip || prev.dnsName !== dnsName) {
-                  await writeStatusJson({ ip, dnsName })
-                }
+            if (prevBackendState !== 'Running') {
+              // Transition into Running: re-apply serves, refresh status.json
+              // (updates serve URLs in Interfaces), clear any consumed key.
+              try {
+                const store = (await storeJson.read().once()) ?? defaultStore
+                await convergeAfterLogin(subcontainer, store)
+              } catch (e) {
+                console.error('[main] post-login converge failed:', e)
               }
-            } catch (e) {
-              console.error('Failed to persist tailscale status:', e)
+            } else {
+              // Steady state: keep status.json fresh — the MagicDNS name can
+              // arrive shortly after Running. Writes are diff-gated.
+              try {
+                await persistNodeStatus(subcontainer)
+              } catch (e) {
+                console.error('[main] Failed to persist tailscale status:', e)
+              }
             }
+          }
+          prevBackendState = backendState
 
-            // Clear any persisted auth key once the node is Running so it is not
-            // re-applied on subsequent restarts (the identity is already persisted
-            // in tailscaled.state). Check the current store value rather than
-            // pendingAuthKey so keys written by the login action while the service
-            // was already running are also cleared.
-            try {
-              const currentStore = (await storeJson.read().once()) ?? initialStore
-              if (currentStore.authKey) {
-                await writeStoreJson({ ...currentStore, authKey: null })
-                console.info('[main] Auth key consumed and cleared from store.json.')
-              }
-            } catch (e) {
-              console.error('[main] Failed to clear auth key from store.json:', e)
+          // Surface a pending auth URL in the health message and the logs so
+          // the user can complete login in a browser.
+          if (backendState === 'NeedsLogin' && authUrl) {
+            console.info(`[main] Authentication pending — visit: ${authUrl}`)
+            return {
+              result: 'success',
+              message: `Authenticate at: ${authUrl}`,
             }
           }
 
           return {
             result: 'success',
-            message: backendState === 'Running'
-              ? 'Tailscale daemon is running'
-              : `Tailscale daemon ready (${backendState})`,
+            message:
+              backendState === 'Running'
+                ? 'Tailscale daemon is running'
+                : `Tailscale daemon ready (${backendState})`,
           }
         },
         gracePeriod: 10_000,
       },
       requires: [],
-    })
-    .addOneshot('restore-serves', {
-      subcontainer,
-      exec: {
-        fn: async () => {
-          // Serve commands require a populated netMap.  `tailscale serve reset`
-          // fails with "netMap is nil" for any BackendState other than Running
-          // (including NeedsLogin, which has no control-plane connection yet).
-          // Poll until Running or timeout — if we never reach Running (e.g.
-          // fresh install still waiting for auth), skip the restore entirely;
-          // the serves will be reapplied on the next start once the node is
-          // connected.
-          const POLL_INTERVAL_MS = 500
-          const POLL_TIMEOUT_MS = 10_000
-          const deadline = Date.now() + POLL_TIMEOUT_MS
-
-          let reachedRunning = false
-          while (Date.now() < deadline) {
-            const r = await subcontainer.exec([
-              'tailscale',
-              '--socket=' + SOCKET,
-              'status',
-              '--json',
-            ])
-            if (r.exitCode === 0) {
-              let st: { BackendState?: string } = {}
-              try {
-                st = JSON.parse(r.stdout.toString())
-              } catch {}
-              const state = st.BackendState ?? ''
-              if (state === 'Running') {
-                reachedRunning = true
-                break
-              }
-            }
-            await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
-          }
-
-          if (!reachedRunning) {
-            console.info(
-              '[restore-serves] BackendState never reached Running within timeout ' +
-              '(node may need login); skipping serve restore — will retry on next start',
-            )
-            return null
-          }
-
-          const storeData = (await storeJson.read().once()) ?? {
-            machineName: 'startos',
-            hostnameSet: false,
-            serves: {},
-            authKey: null,
-            controlServer: null,
-          }
-          const serves = storeData.serves
-          if (Object.keys(serves).length > 0) {
-            await applyServicesConfig(
-              subcontainer,
-              serves,
-              storeData.controlServer !== null,
-            )
-          }
-          return null
-        },
-      },
-      requires: ['tailscaled'],
-    })
-    .addOneshot('set-hostname', {
-      subcontainer,
-      exec: {
-        fn: async () => {
-          // Always apply the user-chosen machine name via `tailscale set --hostname`
-          // on every start.  The stored machineName is the source of truth; Tailscale
-          // appends "-1"/"-N" automatically if the name conflicts with another node.
-          const storeData = (await storeJson.read().once()) ?? {
-            machineName: 'startos',
-            hostnameSet: false,
-            serves: {},
-            authKey: null,
-            controlServer: null,
-          }
-
-          const name = storeData.machineName ?? 'startos'
-          console.info(`[set-hostname] applying hostname: ${name}`)
-
-          const r = await subcontainer.exec([
-            'tailscale',
-            '--socket=' + SOCKET,
-            'set',
-            '--hostname=' + name,
-          ])
-
-          if (r.exitCode !== 0) {
-            throw new Error(
-              `[set-hostname] tailscale set --hostname failed: ${r.stderr.toString()}`,
-            )
-          }
-
-          console.info(`[set-hostname] hostname set to: ${name}`)
-          return null
-        },
-      },
-      requires: ['restore-serves'],
     })
     .addDaemon('tailscale-web', {
       subcontainer,
@@ -289,6 +158,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
             errorMessage: 'The web interface is not yet ready',
           }),
       },
-      requires: ['tailscaled', 'set-hostname'],
+      requires: ['tailscaled'],
     })
 })

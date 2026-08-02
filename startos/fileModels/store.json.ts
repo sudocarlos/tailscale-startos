@@ -133,6 +133,15 @@ export const shape = z
 
 export type Store = z.infer<typeof currentShape>
 
+/** Fallback when store.json does not exist yet (e.g. before first init). */
+export const defaultStore: Store = {
+  machineName: 'startos',
+  hostnameSet: false,
+  serves: {},
+  authKey: null,
+  controlServer: null,
+}
+
 const PATH = sdk.volumes.startos.subpath('/store.json')
 
 export const storeJson = FileHelper.json(
