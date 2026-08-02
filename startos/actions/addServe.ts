@@ -231,7 +231,11 @@ export const addServe = sdk.Action.withInput(
       mounts,
       'tailscale-serve-add',
       async (sub) => {
-        await applyServicesConfig(sub, updatedServes)
+        await applyServicesConfig(
+          sub,
+          updatedServes,
+          storeData.controlServer !== null,
+        )
       },
     )
 

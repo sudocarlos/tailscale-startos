@@ -21,6 +21,11 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
     const status = await statusJson.read().const(effects)
     if (!status) return
 
+    // Proxy serves are plain HTTP when a custom control server is configured
+    // (a Headscale server cannot provision the TLS certs --https requires),
+    // so exported URLs must not carry the TLS label.
+    const customControlServer = storeData.controlServer !== null
+
     // Collect candidate entries, skipping legacy and startos self-target.
     const candidates: Array<{
       packageId: string
@@ -37,6 +42,11 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
         // The URL plugin tile will continue to show "Add Serve"; the user
         // re-clicks once to supply the full metadata.
         if (entry.hostId === '') continue
+
+        // Skip funnel entries when a custom control server is set — they are
+        // not applied (Funnel is Tailscale-cloud-only), so exporting a public
+        // URL would advertise something that does not exist.
+        if (entry.mode === 'funnel' && customControlServer) continue
 
         candidates.push({
           packageId,
@@ -94,7 +104,12 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
         // expected; only the displayed protocol label is wrong. Track the
         // upstream SDK/platform change to add a TCP label before reworking
         // this.
-        const ssl = scheme === 'http' || scheme === 'ws' || scheme === 'https' || scheme === 'wss'
+        const ssl =
+          !customControlServer &&
+          (scheme === 'http' ||
+            scheme === 'ws' ||
+            scheme === 'https' ||
+            scheme === 'wss')
         // Only Funnel entries are truly public (internet-accessible).
         // Serve entries stay within the private tailnet.
         const isPublic = mode === 'funnel'
@@ -109,7 +124,11 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
               internalPort,
               ssl,
               public: isPublic,
-              hostname: status.dnsName,
+              // Fall back to the tailnet IP when no MagicDNS name is
+              // available (e.g. a Headscale server without MagicDNS
+              // configured) — an empty hostname would fail URL export
+              // entirely, leaving stale tiles behind.
+              hostname: status.dnsName || status.ip,
               port,
               info: null,
             },

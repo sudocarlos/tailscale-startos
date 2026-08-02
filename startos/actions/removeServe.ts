@@ -91,7 +91,11 @@ export const removeServe = sdk.Action.withInput(
       mounts,
       'tailscale-serve-remove',
       async (sub) => {
-        await applyServicesConfig(sub, updatedServes)
+        await applyServicesConfig(
+          sub,
+          updatedServes,
+          storeData.controlServer !== null,
+        )
       },
     )
 

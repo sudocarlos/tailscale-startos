@@ -22,6 +22,11 @@ const SOCKET = '/var/run/tailscale/tailscaled.sock'
  *
  * The --https <tailnetPort> flag controls TLS on the tailnet-facing side and
  * is independent of the upstream target scheme.
+ *
+ * When `customControlServer` is true (a Headscale URL is configured), proxy
+ * serves use --http instead of --https — a custom control server cannot
+ * provision the TLS certificates --https requires — and funnel entries are
+ * skipped entirely (Funnel is a Tailscale-cloud-only feature).
  */
 export async function applyServicesConfig(
   sub: {
@@ -30,6 +35,7 @@ export async function applyServicesConfig(
     ) => Promise<{ exitCode: number | null; stderr: Buffer | string }>
   },
   store: z.infer<typeof servesShape>,
+  customControlServer: boolean,
 ): Promise<void> {
   // Reset all existing serves first
   const resetResult = await sub.exec([
@@ -77,6 +83,14 @@ export async function applyServicesConfig(
       // StarOS UI is reachable at 'startos'; other services use '<packageId>.startos'
       const host = packageId === 'startos' ? 'startos' : `${packageId}.startos`
 
+      if (mode === 'funnel' && customControlServer) {
+        console.warn(
+          `[serves] ${packageId}/${interfaceId}: skipping funnel entry — ` +
+            'Funnel requires the official Tailscale control plane',
+        )
+        continue
+      }
+
       let cmd: string[]
 
       if (mode === 'funnel') {
@@ -114,7 +128,7 @@ export async function applyServicesConfig(
         }
 
         console.info(
-          `[serves] ${packageId}/${interfaceId}: scheme=${scheme} → ${isHttpProxy ? '--https' : '--tcp'} ${port} ${target}`,
+          `[serves] ${packageId}/${interfaceId}: scheme=${scheme} → ${isHttpProxy ? (customControlServer ? '--http' : '--https') : '--tcp'} ${port} ${target}`,
         )
 
         cmd = isHttpProxy
@@ -123,7 +137,7 @@ export async function applyServicesConfig(
               '--socket=' + SOCKET,
               'serve',
               '--bg',
-              '--https',
+              customControlServer ? '--http' : '--https',
               String(port),
               target,
             ]

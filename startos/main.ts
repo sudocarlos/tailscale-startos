@@ -223,7 +223,11 @@ export const main = sdk.setupMain(async ({ effects }) => {
           }
           const serves = storeData.serves
           if (Object.keys(serves).length > 0) {
-            await applyServicesConfig(subcontainer, serves)
+            await applyServicesConfig(
+              subcontainer,
+              serves,
+              storeData.controlServer !== null,
+            )
           }
           return null
         },
