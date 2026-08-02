@@ -21,13 +21,19 @@ export interface ExecSub {
   }>
 }
 
+/** The daemon's view of itself, as reported by `tailscale status --json`. */
+export interface NodeStatus {
+  state: string
+  authUrl: string
+  health: string[]
+}
+
 /**
- * Reads BackendState and any pending AuthURL from the daemon.
- * Returns null when the daemon socket is unreachable (service stopped).
+ * Reads BackendState, any pending AuthURL, and the current health warnings
+ * from the daemon. Returns null when the daemon socket is unreachable
+ * (service stopped).
  */
-export async function getNodeStatus(
-  sub: ExecSub,
-): Promise<{ state: string; authUrl: string } | null> {
+export async function getNodeStatus(sub: ExecSub): Promise<NodeStatus | null> {
   const result = await sub.exec([
     'tailscale',
     '--socket=' + SOCKET,
@@ -39,14 +45,62 @@ export async function getNodeStatus(
     const parsed = JSON.parse(result.stdout.toString().trim()) as {
       BackendState?: string
       AuthURL?: string
+      Health?: string[]
     }
     return {
       state: parsed.BackendState ?? 'unknown',
       authUrl: parsed.AuthURL ?? '',
+      health: parsed.Health ?? [],
     }
   } catch {
-    return { state: 'unknown', authUrl: '' }
+    return { state: 'unknown', authUrl: '', health: [] }
   }
+}
+
+/**
+ * Health warnings the daemon raises while the node holds no valid session
+ * with its control server: "You are logged out." (optionally followed by the
+ * last login error), the older "Not logged in, last login error: ...", and
+ * the expired-node-key warning ("... you will need to log in again ...").
+ * Matched as text because `tailscale status --json` exposes health warnings
+ * as plain strings, without their warnable codes.
+ *
+ * Deliberately narrow, and narrower than it could be: a false positive would
+ * withhold the post-login converge indefinitely on a healthy node, so
+ * warnings that merely mention re-authentication ("Your node key will expire
+ * in 5 days. Reauthenticate to ...") must not match.
+ */
+const LOGGED_OUT_HEALTH = /logged out|not logged in|log ?in again/i
+
+/**
+ * Explains why the daemon holds no live session with its control server, or
+ * null when it does.
+ *
+ * BackendState alone is not a login signal: tailscaled reports Running
+ * whenever WantRunning is set and a netmap is in memory, including while it
+ * is logged out and re-registering against a different control plane
+ * (`tailscale up --login-server=<new> --force-reauth` shuts the control
+ * client down but leaves the outgoing netmap in place, so the node keeps
+ * reporting Running for the whole re-authentication). Converging on that
+ * Running writes serves into the outgoing profile, which tailscaled discards
+ * once the new profile becomes active.
+ *
+ * A pending AuthURL and a login-state health warning each independently mean
+ * the node has no session, so Running is trusted only in the absence of both.
+ * The reason is surfaced (rather than a bare boolean) so the logs explain why
+ * a converge is being withheld.
+ */
+export function loggedOutReason(status: NodeStatus): string | null {
+  if (status.state !== 'Running') return `backend state is ${status.state}`
+  if (status.authUrl) return 'interactive authentication is pending'
+  return (
+    status.health.find((warning) => LOGGED_OUT_HEALTH.test(warning)) ?? null
+  )
+}
+
+/** Whether the daemon holds a live session with its control server. */
+export function isLoggedIn(status: NodeStatus): boolean {
+  return loggedOutReason(status) === null
 }
 
 /**
@@ -60,21 +114,21 @@ export async function getNodeStatus(
  *   reset to the default Tailscale control plane (`tailscale up` flags are
  *   not persisted between runs, so every run passes the complete set).
  * - `--auth-key` is included only when a key is configured AND the node is
- *   not already Running (re-authenticating a healthy node with a possibly
+ *   not already logged in (re-authenticating a healthy node with a possibly
  *   single-use key is wasteful and risks losing the session if the key is
  *   exhausted). The key travels via env, never argv.
  * - When the daemon demands re-authentication (e.g. the configured control
  *   server changed while logged in), the command is retried once with
  *   `--force-reauth`: headless when a key is configured, otherwise
  *   backgrounded — the retry produces an AuthURL against the new control
- *   plane which pollUntilRunning surfaces.
+ *   plane which pollUntilLoggedIn surfaces.
  *
  * Runs in the foreground with a bounded --timeout whenever the outcome is
- * deterministic (an auth key is configured, or the node is already Running
+ * deterministic (an auth key is configured, or the node is already logged in
  * and only prefs are being converged); a timeout means prefs were applied
  * but the connection is still establishing, which the caller's polling
  * picks up. Runs in the background when interactive browser auth is
- * expected (no key, not Running), because `tailscale up` blocks until the
+ * expected (no key, not logged in), because `tailscale up` blocks until the
  * user completes login.
  *
  * No-op when the daemon socket is unreachable (service stopped): the stored
@@ -92,7 +146,7 @@ export async function runTailscaleUp(
     )
     return
   }
-  const running = status.state === 'Running'
+  const loggedIn = isLoggedIn(status)
 
   const buildCmd = (withAuthKey: boolean, forceReauth: boolean) => {
     const env: Record<string, string> = {
@@ -119,7 +173,7 @@ export async function runTailscaleUp(
       },
     )
 
-  if (!running && !store.authKey) {
+  if (!loggedIn && !store.authKey) {
     // Interactive login expected — `tailscale up` blocks until the user
     // authenticates, so background it. The AuthURL appears in
     // `tailscale status --json` and is surfaced by the caller's polling.
@@ -131,7 +185,7 @@ export async function runTailscaleUp(
     return
   }
 
-  const first = buildCmd(!running, false)
+  const first = buildCmd(!loggedIn, false)
   const result = await run(first.cmd + ' --timeout=30s', first.env, false)
   if (result.exitCode === 0) {
     console.info('[up] tailscale up succeeded')
@@ -185,29 +239,33 @@ export async function runTailscaleUp(
 }
 
 /**
- * Polls `tailscale status --json` until BackendState is Running.
+ * Polls `tailscale status --json` until the daemon holds a live session with
+ * its control server (see loggedOutReason for why BackendState=Running is
+ * not that signal on its own).
  *
  * Polls frequently (default 1s) so login completion is observed promptly.
- * Running must persist for `stablePolls` consecutive reads (default 3)
- * before it is trusted: BackendState flickers through a transient Running
- * for under a second during re-authentication (e.g. --force-reauth after a
- * control-server change) before dropping back to NeedsLogin, and acting on
- * the flicker would apply serves against an unauthenticated daemon
- * (`zero serverNoiseKey` failures).
+ * The logged-in condition must hold for `stablePolls` consecutive reads
+ * (default 3) before it is trusted: the daemon can briefly report a healthy
+ * Running while tearing down one control session and opening another, and
+ * acting on the flicker would apply serves against an outgoing profile.
  *
  * Bails out early when the daemon socket stays unreachable (service
- * stopped) rather than waiting out the full timeout. When interactive auth
- * is pending, each new AuthURL is passed to onAuthUrl as it appears.
+ * stopped) rather than waiting out the full timeout. Each new AuthURL is
+ * passed to onAuthUrl as it appears; with `stopOnAuthUrl` the poll also
+ * returns at that point, because a pending AuthURL means login can only be
+ * completed by the user in a browser and the caller should hand over the
+ * link instead of waiting out its timeout.
  */
-export async function pollUntilRunning(
+export async function pollUntilLoggedIn(
   sub: ExecSub,
   opts: {
     intervalMs?: number
     timeoutMs?: number
     stablePolls?: number
+    stopOnAuthUrl?: boolean
     onAuthUrl?: (url: string) => void
   } = {},
-): Promise<{ running: boolean; authUrl: string }> {
+): Promise<{ loggedIn: boolean; authUrl: string }> {
   const intervalMs = opts.intervalMs ?? 1_000
   const timeoutMs = opts.timeoutMs ?? 90_000
   const stablePolls = opts.stablePolls ?? 3
@@ -215,30 +273,31 @@ export async function pollUntilRunning(
 
   let authUrl = ''
   let misses = 0
-  let runningStreak = 0
+  let loggedInStreak = 0
   while (Date.now() < deadline) {
     const status = await getNodeStatus(sub)
     if (status === null) {
       // Daemon socket unreachable (service stopped) — no point waiting.
-      runningStreak = 0
-      if (++misses >= 3) return { running: false, authUrl: '' }
+      loggedInStreak = 0
+      if (++misses >= 3) return { loggedIn: false, authUrl: '' }
     } else {
       misses = 0
-      if (status.state === 'Running') {
-        if (++runningStreak >= stablePolls) {
-          return { running: true, authUrl: '' }
+      if (isLoggedIn(status)) {
+        if (++loggedInStreak >= stablePolls) {
+          return { loggedIn: true, authUrl: '' }
         }
       } else {
-        runningStreak = 0
+        loggedInStreak = 0
       }
       if (status.authUrl && status.authUrl !== authUrl) {
         authUrl = status.authUrl
         opts.onAuthUrl?.(authUrl)
+        if (opts.stopOnAuthUrl) return { loggedIn: false, authUrl }
       }
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
-  return { running: false, authUrl }
+  return { loggedIn: false, authUrl }
 }
 
 /**
@@ -285,11 +344,11 @@ export async function clearConsumedAuthKey(): Promise<void> {
 }
 
 /**
- * Everything that must happen once the client reaches the logged-in
- * (Running) state: re-apply the configured serves (serve state lives in
- * the daemon and is lost across logouts/control-plane switches), refresh
- * status.json so Interfaces show current serve URLs, and clear any
- * consumed auth key.
+ * Everything that must happen once the client reaches the logged-in state:
+ * re-apply the configured serves (serve state lives in the daemon, per
+ * profile, and is lost across logouts and control-plane switches), refresh
+ * status.json so Interfaces show current serve URLs, and clear any consumed
+ * auth key.
  */
 export async function convergeAfterLogin(
   sub: ExecSub,

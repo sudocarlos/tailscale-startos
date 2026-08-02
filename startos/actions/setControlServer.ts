@@ -4,7 +4,7 @@ import {
   writeStoreJson,
   defaultStore,
 } from '../fileModels/store.json'
-import { runTailscaleUp, pollUntilRunning, convergeAfterLogin } from '../up'
+import { runTailscaleUp, pollUntilLoggedIn, convergeAfterLogin } from '../up'
 
 const STATE_DIR = '/var/lib/tailscale'
 
@@ -142,8 +142,9 @@ export const setControlServer = sdk.Action.withInput(
             console.error('[set-control-server] tailscale up failed:', e)
           }
 
-          const { running, authUrl } = await pollUntilRunning(sub, {
+          const { loggedIn, authUrl } = await pollUntilLoggedIn(sub, {
             timeoutMs: 20_000,
+            stopOnAuthUrl: true,
             onAuthUrl: (url) =>
               console.info(
                 `[set-control-server] authentication pending — visit: ${url}`,
@@ -151,12 +152,14 @@ export const setControlServer = sdk.Action.withInput(
           })
 
           const target = controlServer ?? 'the default Tailscale control plane'
-          if (!running) {
+          if (!loggedIn) {
             return {
               version: '1' as const,
               title: 'Control Server Saved',
               message: authUrl
-                ? `Control server set to ${target}. Complete login in your browser: ${authUrl}`
+                ? `Control server set to ${target}. Authorize this node there ` +
+                  `to finish the switch: ${authUrl}. Your serves are re-applied ` +
+                  'automatically once the node is logged in.'
                 : `Control server set to ${target}. It will take effect the ` +
                   'next time the service is running — watch the Tailscale ' +
                   'Daemon health message for the login link.',

@@ -5,7 +5,7 @@ import {
   defaultStore,
 } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
-import { runTailscaleUp, pollUntilRunning } from '../up'
+import { runTailscaleUp, pollUntilLoggedIn } from '../up'
 import { sdk } from '../sdk'
 import {
   assignFunnelPort,
@@ -257,10 +257,11 @@ export const addServe = sdk.Action.withInput(
         } catch (e) {
           console.error('[addServe] tailscale up failed:', e)
         }
-        const { running } = await pollUntilRunning(sub, {
+        const { loggedIn } = await pollUntilLoggedIn(sub, {
           timeoutMs: 10_000,
+          stopOnAuthUrl: true,
         })
-        if (!running) {
+        if (!loggedIn) {
           applied = false
           return
         }

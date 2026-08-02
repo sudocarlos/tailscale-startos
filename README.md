@@ -64,7 +64,7 @@ temp containers can reach the tailscaled Unix socket):
 **Key files:**
 
 - `tailscale/tailscaled.state` — node identity, keys, and tailnet membership
-- `startos/store.json` — top-level object containing `machineName` (the Tailscale hostname), `authKey` (nullable string, persisted between restarts and cleared once the node reaches `BackendState=Running`), `controlServer` (nullable string, a custom control server URL such as Headscale; `null` means the default Tailscale control plane), and `serves` (maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves)
+- `startos/store.json` — top-level object containing `machineName` (the Tailscale hostname), `authKey` (nullable string, persisted between restarts and cleared once the node is logged in), `controlServer` (nullable string, a custom control server URL such as Headscale; `null` means the default Tailscale control plane), and `serves` (maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves)
 - `startos/status.json` — cached `{ ip, dnsName }` rewritten whenever the connected node reports new values
 
 All state persists across restarts. The node retains its Tailscale IP address as
@@ -340,10 +340,19 @@ metadata — the existing tailnet port is preserved.
 Once per start, the `tailscaled` ready-check converges the daemon to the stored
 configuration with `tailscale up --hostname=<name> --login-server=<server>`
 (plus `--auth-key` when one is pending). While interactive login is pending, the
-authentication link is shown in the health message. On every transition into
-`BackendState=Running`, configured serves are re-applied from `store.json` and
+authentication link is shown in the health message. On every transition into the
+logged-in state, configured serves are re-applied from `store.json` and
 the node's Tailscale IP and MagicDNS name are written to `startos/status.json`,
 which updates serve URLs in the Interfaces panel.
+
+> **Logged in is not the same as `BackendState=Running`.** tailscaled reports
+> Running whenever it wants to be up and holds a netmap, including for the whole
+> of a re-authentication against a different control server — it keeps serving
+> the outgoing tailnet's netmap while the control connection is torn down and the
+> node re-registers. The package therefore treats the node as logged in only when
+> BackendState is Running, no AuthURL is pending, and no login-state health
+> warning is present. Serves written before that point would land in the profile
+> tailscaled is about to discard.
 
 ---
 
@@ -406,12 +415,13 @@ dependencies: none
 daemons:
   - id: tailscaled
     command: tailscaled --state=... --socket=... --tun=userspace-networking
-    health: tailscale status --json (socket responsive; AuthURL shown while NeedsLogin)
+    health: tailscale status --json (socket responsive; pending AuthURL shown in the message)
     on_start: |
       once per start cycle (from store.json):
         tailscale up --hostname=<machineName> --login-server=<controlServer|''> [--auth-key=<key>]
         (retried once with --force-reauth when the daemon demands re-authentication)
-      on every transition into BackendState=Running:
+      on every transition into the logged-in state (Running, no AuthURL, no
+      login-state health warning):
         applyServicesConfig (below), write ip + dnsName to startos/status.json,
         clear consumed authKey from store.json
   - id: tailscale-web
@@ -453,7 +463,7 @@ actions:
     behavior: |
       write machineName to startos/store.json
       tailscale up --hostname=<name> --login-server=<controlServer|''> (applies live, any login state)
-      poll status until Running, then re-apply serves and refresh status.json
+      poll status until logged in, then re-apply serves and refresh status.json
       if daemon stopped: startup ready-check applies the name on next start
   - id: set-control-server   # visible in the Actions panel
     name: Control Server
@@ -463,7 +473,7 @@ actions:
       write controlServer to startos/store.json and clear any stored authKey
       tailscale up --hostname=<name> --login-server=<url|''> (live; retried with
         --force-reauth when the node was logged in to a different plane)
-      poll status until Running: headless with a key, otherwise return the
+      poll status until logged in: headless with a key, otherwise return the
         pending AuthURL for browser login; serves re-apply automatically
   - id: login   # visible in the Actions panel
     name: Login
@@ -472,7 +482,7 @@ actions:
     behavior: |
       always save authKey to startos/store.json when provided
       tailscale up --hostname=<name> --login-server=<controlServer|''> [--auth-key=<key>]
-      poll status until Running, then re-apply serves, refresh status.json,
+      poll status until logged in, then re-apply serves, refresh status.json,
         and clear the consumed authKey from the store
       if authKey blank: return the pending AuthURL for browser login
       if daemon stopped: authKey persists in store.json; startup ready-check applies it

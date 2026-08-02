@@ -4,7 +4,7 @@ import {
   writeStoreJson,
   defaultStore,
 } from '../fileModels/store.json'
-import { runTailscaleUp, pollUntilRunning, convergeAfterLogin } from '../up'
+import { runTailscaleUp, pollUntilLoggedIn, convergeAfterLogin } from '../up'
 
 const STATE_DIR = '/var/lib/tailscale'
 
@@ -97,11 +97,12 @@ export const setMachineName = sdk.Action.withInput(
             console.error('[set-machine-name] tailscale up failed:', e)
           }
 
-          const { running, authUrl } = await pollUntilRunning(sub, {
+          const { loggedIn, authUrl } = await pollUntilLoggedIn(sub, {
             timeoutMs: 15_000,
+            stopOnAuthUrl: true,
           })
 
-          if (!running) {
+          if (!loggedIn) {
             return {
               version: '1' as const,
               title: 'Machine Name Saved',

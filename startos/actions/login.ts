@@ -4,7 +4,7 @@ import {
   writeStoreJson,
   defaultStore,
 } from '../fileModels/store.json'
-import { runTailscaleUp, pollUntilRunning, convergeAfterLogin } from '../up'
+import { runTailscaleUp, pollUntilLoggedIn, convergeAfterLogin } from '../up'
 
 const STATE_DIR = '/var/lib/tailscale'
 
@@ -108,13 +108,15 @@ export const getStarted = sdk.Action.withInput(
           }
 
           // Poll frequently until the client is logged in so an interactive
-          // login completed in the browser is observed promptly.
-          const { running, authUrl } = await pollUntilRunning(sub, {
+          // login completed in the browser is observed promptly, and hand
+          // back the link as soon as one is issued.
+          const { loggedIn, authUrl } = await pollUntilLoggedIn(sub, {
+            stopOnAuthUrl: true,
             onAuthUrl: (url) =>
               console.info(`[login] authentication pending — visit: ${url}`),
           })
 
-          if (!running) {
+          if (!loggedIn) {
             return {
               version: '1' as const,
               title: 'Login Pending',

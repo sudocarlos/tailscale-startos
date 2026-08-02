@@ -5,7 +5,7 @@ import {
   defaultStore,
 } from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
-import { runTailscaleUp, pollUntilRunning } from '../up'
+import { runTailscaleUp, pollUntilLoggedIn } from '../up'
 import { sdk } from '../sdk'
 import { normalizePackageId } from '../utils'
 import { z } from '@start9labs/start-sdk'
@@ -95,10 +95,11 @@ export const removeServe = sdk.Action.withInput(
         } catch (e) {
           console.error('[removeServe] tailscale up failed:', e)
         }
-        const { running } = await pollUntilRunning(sub, {
+        const { loggedIn } = await pollUntilLoggedIn(sub, {
           timeoutMs: 10_000,
+          stopOnAuthUrl: true,
         })
-        if (!running) {
+        if (!loggedIn) {
           applied = false
           return
         }

@@ -1,6 +1,12 @@
 import { sdk } from './sdk'
 import { storeJson, defaultStore } from './fileModels/store.json'
-import { runTailscaleUp, convergeAfterLogin, persistNodeStatus } from './up'
+import {
+  runTailscaleUp,
+  convergeAfterLogin,
+  persistNodeStatus,
+  getNodeStatus,
+  loggedOutReason,
+} from './up'
 import { UI_PORT } from './constants'
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'
@@ -28,20 +34,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // keeps reporting state.
   let upTriggered = false
 
-  // Consecutive polls reporting BackendState=Running. BackendState
-  // flickers through a transient Running for under a second during
-  // re-authentication (e.g. --force-reauth after a control-server change)
-  // before dropping back to NeedsLogin — the post-login converge fires only
-  // once Running has persisted for two consecutive polls, so serves are
-  // never applied against an unauthenticated daemon. Reaching the streak
-  // again after the state leaves Running counts as a new transition, so a
-  // mid-cycle re-authentication also restores serves and refreshes
-  // status.json.
-  let runningStreak = 0
+  // Consecutive polls in which the daemon held a live session with its
+  // control server. Being logged in is not the same as BackendState=Running:
+  // tailscaled keeps reporting Running, on the outgoing netmap, for the whole
+  // of a re-authentication against a new control plane (see loggedOutReason).
+  // The post-login converge fires only once the logged-in condition has held
+  // for two consecutive polls, so serves are never written to a profile the
+  // daemon is about to discard. Reaching the streak again after the session
+  // drops counts as a new transition, so a mid-cycle re-authentication also
+  // restores serves and refreshes status.json.
+  let loggedInStreak = 0
 
-  // Set on every confirmed transition into Running and cleared once the
-  // post-login converge succeeds. The converge is retried on each poll
-  // while pending because the daemon's netMap can lag the Running state,
+  // Set on every confirmed transition into the logged-in state and cleared
+  // once the post-login converge succeeds. The converge is retried on each
+  // poll while pending because the daemon's netMap can lag the login,
   // causing transient `tailscale serve` failures right after login.
   let convergePending = false
 
@@ -59,13 +65,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
       ready: {
         display: 'Tailscale Daemon',
         fn: async () => {
-          const result = await subcontainer.exec([
-            'tailscale',
-            '--socket=' + SOCKET,
-            'status',
-            '--json',
-          ])
-          if (result.exitCode !== 0) {
+          const status = await getNodeStatus(subcontainer)
+          if (status === null) {
             return {
               result: 'loading',
               message: 'Waiting for tailscaled socket...',
@@ -74,18 +75,14 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
           // Socket is responsive. BackendState is "NoState" | "NeedsLogin" |
           // "NeedsRoutineAuth" | "Stopped" | "Starting" | "Running".
-          // We do NOT block on Running here — the web UI must be reachable
-          // in NeedsLogin so the user can authenticate on a fresh install.
-          let statusData: { BackendState?: string; AuthURL?: string }
-          try {
-            statusData = JSON.parse(result.stdout.toString().trim())
-          } catch {
-            statusData = {}
-          }
-
-          const backendState = statusData.BackendState ?? 'unknown'
-          const authUrl = statusData.AuthURL ?? ''
-          console.info(`[tailscaled] BackendState: ${backendState}`)
+          // We do NOT block on being logged in here — the web UI must be
+          // reachable in NeedsLogin so the user can authenticate on a fresh
+          // install.
+          const reason = loggedOutReason(status)
+          console.info(
+            `[tailscaled] BackendState: ${status.state}` +
+              (reason ? ` (not logged in: ${reason})` : ''),
+          )
 
           // Converge the daemon to the stored config once per start cycle:
           // `tailscale up --hostname --login-server [--auth-key]`. Applies
@@ -103,14 +100,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
             }
           }
 
-          if (backendState === 'Running') {
-            runningStreak++
-            if (runningStreak === 2) convergePending = true
+          const loggedIn = reason === null
+          if (loggedIn) {
+            loggedInStreak++
+            if (loggedInStreak === 2) convergePending = true
           } else {
-            runningStreak = 0
+            loggedInStreak = 0
           }
 
-          if (backendState === 'Running') {
+          if (loggedIn) {
             if (convergePending) {
               // Post-login converge: re-apply serves, refresh status.json
               // (updates serve URLs in Interfaces), clear any consumed key.
@@ -126,7 +124,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
               }
             } else {
               // Steady state: keep status.json fresh — the MagicDNS name can
-              // arrive shortly after Running. Writes are diff-gated.
+              // arrive shortly after login. Writes are diff-gated.
               try {
                 await persistNodeStatus(subcontainer)
               } catch (e) {
@@ -136,21 +134,34 @@ export const main = sdk.setupMain(async ({ effects }) => {
           }
 
           // Surface a pending auth URL in the health message and the logs so
-          // the user can complete login in a browser.
-          if (backendState === 'NeedsLogin' && authUrl) {
-            console.info(`[main] Authentication pending — visit: ${authUrl}`)
+          // the user can complete login in a browser. This is not gated on
+          // BackendState: a control-server switch leaves the daemon Running
+          // on its outgoing netmap while it waits for the user to authorize
+          // the node on the new plane.
+          if (status.authUrl) {
+            console.info(
+              `[main] Authentication pending — visit: ${status.authUrl}`,
+            )
             return {
               result: 'success',
-              message: `Authenticate at: ${authUrl}`,
+              message: `Authenticate at: ${status.authUrl}`,
+            }
+          }
+
+          if (loggedIn) {
+            return {
+              result: 'success',
+              message: 'Tailscale daemon is running',
             }
           }
 
           return {
             result: 'success',
             message:
-              backendState === 'Running'
-                ? 'Tailscale daemon is running'
-                : `Tailscale daemon ready (${backendState})`,
+              status.state === 'Running'
+                ? 'Tailscale daemon is not logged in — waiting for the ' +
+                  'authentication link'
+                : `Tailscale daemon ready (${status.state})`,
           }
         },
         gracePeriod: 10_000,
