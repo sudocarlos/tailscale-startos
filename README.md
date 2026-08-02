@@ -343,7 +343,12 @@ configuration with `tailscale up --hostname=<name> --login-server=<server>`
 authentication link is shown in the health message. On every transition into the
 logged-in state, configured serves are re-applied from `store.json` and
 the node's Tailscale IP and MagicDNS name are written to `startos/status.json`,
-which updates serve URLs in the Interfaces panel.
+which updates serve URLs in the Interfaces panel. The node then pings a few
+online peers: a freshly (re-)registered node appears in its peers' netmaps
+with no known endpoint or DERP home until it has sent something outbound, so
+serves are unreachable until the first packet. Originating that traffic
+immediately makes the node reachable within seconds of login instead of
+whenever the first outbound connection happens to occur.
 
 > **Logged in is not the same as `BackendState=Running`.** tailscaled reports
 > Running whenever it wants to be up and holds a netmap, including for the whole

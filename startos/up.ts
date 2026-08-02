@@ -21,11 +21,19 @@ export interface ExecSub {
   }>
 }
 
+/** A peer as reported by `tailscale status --json`. */
+export interface PeerSummary {
+  hostName: string
+  ip: string
+  online: boolean
+}
+
 /** The daemon's view of itself, as reported by `tailscale status --json`. */
 export interface NodeStatus {
   state: string
   authUrl: string
   health: string[]
+  peers: PeerSummary[]
 }
 
 /**
@@ -46,14 +54,29 @@ export async function getNodeStatus(sub: ExecSub): Promise<NodeStatus | null> {
       BackendState?: string
       AuthURL?: string
       Health?: string[]
+      Peer?: Record<
+        string,
+        { HostName?: string; TailscaleIPs?: string[]; Online?: boolean }
+      >
+    }
+    const peers: PeerSummary[] = []
+    for (const peer of Object.values(parsed.Peer ?? {})) {
+      const ip = (peer.TailscaleIPs ?? []).find((ip) => !ip.includes(':'))
+      if (!ip) continue
+      peers.push({
+        hostName: peer.HostName ?? ip,
+        ip,
+        online: peer.Online === true,
+      })
     }
     return {
       state: parsed.BackendState ?? 'unknown',
       authUrl: parsed.AuthURL ?? '',
       health: parsed.Health ?? [],
+      peers,
     }
   } catch {
-    return { state: 'unknown', authUrl: '', health: [] }
+    return { state: 'unknown', authUrl: '', health: [], peers: [] }
   }
 }
 
@@ -344,11 +367,71 @@ export async function clearConsumedAuthKey(): Promise<void> {
 }
 
 /**
+ * Originates a small amount of traffic toward online peers so the node's
+ * endpoints and DERP home become known across the tailnet.
+ *
+ * Why: a node that has just registered against a control server appears in
+ * its peers' netmaps with no endpoint and no DERP home until it has sent
+ * something outbound. Until then, peer-initiated connections — and therefore
+ * this node's serves — fail: the peer knows the node exists but has no way
+ * to reach it. A single outbound `tailscale ping` runs path discovery and
+ * publishes this node's endpoints, making the node reachable within a second
+ * or two. This is user-visible on every control-server switch (headless or
+ * interactive): registration alone does not establish the data path.
+ *
+ * Pings up to `maxPeers` online peers (`-c 1`, short timeout). If the netmap
+ * has not caught up with the login yet and no peer reports online, retries
+ * once after a short delay. Strictly best-effort: never throws, and a peer
+ * that does not answer is not an error — one pong from any peer is enough to
+ * establish the path.
+ */
+export async function nudgePeerPaths(
+  sub: ExecSub,
+  opts: { maxPeers?: number } = {},
+): Promise<void> {
+  const maxPeers = opts.maxPeers ?? 3
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const status = await getNodeStatus(sub)
+    const targets = (status?.peers ?? [])
+      .filter((peer) => peer.online)
+      .slice(0, maxPeers)
+    if (targets.length > 0) {
+      for (const target of targets) {
+        const result = await sub.exec([
+          'tailscale',
+          '--socket=' + SOCKET,
+          'ping',
+          '-c',
+          '1',
+          '--timeout=3s',
+          target.ip,
+        ])
+        const out = result.stdout.toString().trim().split('\n')[0]
+        console.info(
+          result.exitCode === 0
+            ? `[nudge] pong from ${target.hostName} (${target.ip}): ${out}`
+            : `[nudge] no reply from ${target.hostName} (${target.ip}): ${
+                out || result.stderr.toString().trim()
+              }`,
+        )
+      }
+      return
+    }
+    if (attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+    }
+  }
+  console.info('[nudge] no online peers; skipping path warm-up')
+}
+
+/**
  * Everything that must happen once the client reaches the logged-in state:
  * re-apply the configured serves (serve state lives in the daemon, per
  * profile, and is lost across logouts and control-plane switches), refresh
- * status.json so Interfaces show current serve URLs, and clear any consumed
- * auth key.
+ * status.json so Interfaces show current serve URLs, clear any consumed
+ * auth key, and originate traffic so the node's endpoints become known to
+ * its peers (a freshly registered node is dark to inbound connections until
+ * it has sent something outbound).
  */
 export async function convergeAfterLogin(
   sub: ExecSub,
@@ -360,4 +443,5 @@ export async function convergeAfterLogin(
   }
   await persistNodeStatus(sub)
   await clearConsumedAuthKey()
+  await nudgePeerPaths(sub)
 }
