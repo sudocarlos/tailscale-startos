@@ -1,10 +1,6 @@
 import { sdk } from './sdk'
 import { storeJson, defaultStore } from './fileModels/store.json'
-import {
-  runTailscaleUp,
-  convergeAfterLogin,
-  persistNodeStatus,
-} from './up'
+import { runTailscaleUp, convergeAfterLogin, persistNodeStatus } from './up'
 import { UI_PORT } from './constants'
 const STATE_DIR = '/var/lib/tailscale'
 const SOCKET = '/var/run/tailscale/tailscaled.sock'

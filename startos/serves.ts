@@ -64,7 +64,7 @@ export async function applyServicesConfig(
     // enabled in the tailnet admin console, which is a normal configuration.
     console.warn(
       `[serves] tailscale funnel reset exited ${funnelResetResult.exitCode}: ` +
-      funnelResetResult.stderr.toString().trim(),
+        funnelResetResult.stderr.toString().trim(),
     )
   }
 

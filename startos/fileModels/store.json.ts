@@ -118,19 +118,17 @@ const currentShape = z.object({
   controlServer: z.string().nullable().default(null),
 })
 
-export const shape = z
-  .union([servesShape, currentShape])
-  .transform((value) =>
-    'serves' in value
-      ? (value as z.infer<typeof currentShape>)
-      : {
-          machineName: 'startos',
-          hostnameSet: false,
-          serves: value as z.infer<typeof servesShape>,
-          authKey: null,
-          controlServer: null,
-        },
-  )
+export const shape = z.union([servesShape, currentShape]).transform((value) =>
+  'serves' in value
+    ? (value as z.infer<typeof currentShape>)
+    : {
+        machineName: 'startos',
+        hostnameSet: false,
+        serves: value as z.infer<typeof servesShape>,
+        authKey: null,
+        controlServer: null,
+      },
+)
 
 export type Store = z.infer<typeof currentShape>
 

@@ -62,86 +62,88 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
     // Resolve live internalPort for each entry in parallel (Fix B).
     // Using .once() per interface avoids stacking live subscriptions (Fix C).
     await Promise.all(
-      candidates.map(async ({ packageId, interfaceId, port, hostId, scheme, mode }) => {
-        let internalPort: number
+      candidates.map(
+        async ({ packageId, interfaceId, port, hostId, scheme, mode }) => {
+          let internalPort: number
 
-        if (packageId === 'startos') {
-          // StarOS has no registered service interface; UI is always at port 80
-          internalPort = 80
-        } else {
-          try {
-            const host = await sdk.host
-              .get(effects, { hostId, packageId })
-              .once()
-            const iface = host
-              ? Object.values(host.bindings)
-                  .flatMap((b) => Object.values(b.interfaces))
-                  .find((i) => i.id === interfaceId)
-              : null
+          if (packageId === 'startos') {
+            // StarOS has no registered service interface; UI is always at port 80
+            internalPort = 80
+          } else {
+            try {
+              const host = await sdk.host
+                .get(effects, { hostId, packageId })
+                .once()
+              const iface = host
+                ? Object.values(host.bindings)
+                    .flatMap((b) => Object.values(b.interfaces))
+                    .find((i) => i.id === interfaceId)
+                : null
 
-            if (!iface) {
+              if (!iface) {
+                console.warn(
+                  `[plugin/url] interface ${packageId}/${interfaceId} not found (package uninstalled?), skipping`,
+                )
+                return
+              }
+
+              internalPort = iface.addressInfo.internalPort
+            } catch (e) {
               console.warn(
-                `[plugin/url] interface ${packageId}/${interfaceId} not found (package uninstalled?), skipping`,
+                `[plugin/url] could not resolve internalPort for ${packageId}/${interfaceId}, skipping:`,
+                e,
               )
               return
             }
-
-            internalPort = iface.addressInfo.internalPort
-          } catch (e) {
-            console.warn(
-              `[plugin/url] could not resolve internalPort for ${packageId}/${interfaceId}, skipping:`,
-              e,
-            )
-            return
           }
-        }
 
-        // PluginHostnameInfo only exposes `ssl: boolean`, which StartOS maps
-        // to an HTTPS/HTTP protocol label in the URL plugin tile. There is no
-        // TCP option in the current SDK type, so raw TCP serves (scheme ===
-        // null, e.g. ZMQ, Bitcoin peer) are mislabelled as "HTTP" in the UI.
-        // The serve itself is configured correctly with `--tcp` and works as
-        // expected; only the displayed protocol label is wrong. Track the
-        // upstream SDK/platform change to add a TCP label before reworking
-        // this.
-        const ssl =
-          !customControlServer &&
-          (scheme === 'http' ||
-            scheme === 'ws' ||
-            scheme === 'https' ||
-            scheme === 'wss')
-        // Only Funnel entries are truly public (internet-accessible).
-        // Serve entries stay within the private tailnet.
-        const isPublic = mode === 'funnel'
+          // PluginHostnameInfo only exposes `ssl: boolean`, which StartOS maps
+          // to an HTTPS/HTTP protocol label in the URL plugin tile. There is no
+          // TCP option in the current SDK type, so raw TCP serves (scheme ===
+          // null, e.g. ZMQ, Bitcoin peer) are mislabelled as "HTTP" in the UI.
+          // The serve itself is configured correctly with `--tcp` and works as
+          // expected; only the displayed protocol label is wrong. Track the
+          // upstream SDK/platform change to add a TCP label before reworking
+          // this.
+          const ssl =
+            !customControlServer &&
+            (scheme === 'http' ||
+              scheme === 'ws' ||
+              scheme === 'https' ||
+              scheme === 'wss')
+          // Only Funnel entries are truly public (internet-accessible).
+          // Serve entries stay within the private tailnet.
+          const isPublic = mode === 'funnel'
 
-        await sdk.plugin.url
-          .exportUrl(effects, {
-            hostnameInfo: {
-              // StartOS expects the literal id 'start_os' for its own UI
-              // host; other services use their string packageId.
-              packageId: packageId === 'startos' ? 'start_os' : packageId,
-              hostId,
-              internalPort,
-              ssl,
-              public: isPublic,
-              // Fall back to the tailnet IP when no MagicDNS name is
-              // available (e.g. a Headscale server without MagicDNS
-              // configured) — an empty hostname would fail URL export
-              // entirely, leaving stale tiles behind.
-              hostname: status.dnsName || status.ip,
-              port,
-              info: null,
-            },
-            removeAction: removeServe,
-            overflowActions: [],
-          })
-          .catch((e) => {
-            console.error(
-              `[plugin/url] failed to export url for ${packageId}/${interfaceId}:`,
-              e,
-            )
-          })
-      }),
+          await sdk.plugin.url
+            .exportUrl(effects, {
+              hostnameInfo: {
+                // StartOS expects the literal id 'start_os' for its own UI
+                // host; other services use their string packageId.
+                packageId: packageId === 'startos' ? 'start_os' : packageId,
+                hostId,
+                internalPort,
+                ssl,
+                public: isPublic,
+                // Fall back to the tailnet IP when no MagicDNS name is
+                // available (e.g. a Headscale server without MagicDNS
+                // configured) — an empty hostname would fail URL export
+                // entirely, leaving stale tiles behind.
+                hostname: status.dnsName || status.ip,
+                port,
+                info: null,
+              },
+              removeAction: removeServe,
+              overflowActions: [],
+            })
+            .catch((e) => {
+              console.error(
+                `[plugin/url] failed to export url for ${packageId}/${interfaceId}:`,
+                e,
+              )
+            })
+        },
+      ),
     )
   },
 )

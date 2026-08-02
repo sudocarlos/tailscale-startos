@@ -1,9 +1,5 @@
 import { applyServicesConfig } from './serves'
-import {
-  storeJson,
-  writeStoreJson,
-  type Store,
-} from './fileModels/store.json'
+import { storeJson, writeStoreJson, type Store } from './fileModels/store.json'
 import { statusJson, writeStatusJson } from './fileModels/status.json'
 import { parseTailscaleIp, parseDnsName } from './utils'
 
@@ -115,21 +111,22 @@ export async function runTailscaleUp(
     return { cmd, env }
   }
 
-  const run = (
-    cmd: string,
-    env: Record<string, string>,
-    background: boolean,
-  ) =>
-    sub.exec(['sh', '-c', background ? `${cmd} >/tmp/tailscale-up.log 2>&1 &` : cmd], {
-      env,
-    })
+  const run = (cmd: string, env: Record<string, string>, background: boolean) =>
+    sub.exec(
+      ['sh', '-c', background ? `${cmd} >/tmp/tailscale-up.log 2>&1 &` : cmd],
+      {
+        env,
+      },
+    )
 
   if (!running && !store.authKey) {
     // Interactive login expected — `tailscale up` blocks until the user
     // authenticates, so background it. The AuthURL appears in
     // `tailscale status --json` and is surfaced by the caller's polling.
     const { cmd, env } = buildCmd(false, false)
-    console.info('[up] no auth key configured; starting interactive login in the background')
+    console.info(
+      '[up] no auth key configured; starting interactive login in the background',
+    )
     await run(cmd, env, true)
     return
   }
@@ -152,7 +149,11 @@ export async function runTailscaleUp(
     // backgrounded (AuthURL follows via status) otherwise.
     const retry = buildCmd(true, true)
     if (store.authKey) {
-      const retryResult = await run(retry.cmd + ' --timeout=30s', retry.env, false)
+      const retryResult = await run(
+        retry.cmd + ' --timeout=30s',
+        retry.env,
+        false,
+      )
       if (retryResult.exitCode !== 0) {
         const retryErr =
           retryResult.stderr?.toString().trim() ||
@@ -174,7 +175,9 @@ export async function runTailscaleUp(
   if (/timeout|timed out|deadline exceeded/i.test(errText)) {
     // Prefs were applied; the connection is still establishing. The
     // caller's polling observes the outcome via `tailscale status`.
-    console.info('[up] tailscale up still connecting after --timeout; continuing to poll')
+    console.info(
+      '[up] tailscale up still connecting after --timeout; continuing to poll',
+    )
     return
   }
 
@@ -227,7 +230,12 @@ export async function pollUntilRunning(
  * Writes only when the values actually change.
  */
 export async function persistNodeStatus(sub: ExecSub): Promise<void> {
-  const ipResult = await sub.exec(['tailscale', '--socket=' + SOCKET, 'ip', '-4'])
+  const ipResult = await sub.exec([
+    'tailscale',
+    '--socket=' + SOCKET,
+    'ip',
+    '-4',
+  ])
   if (ipResult.exitCode !== 0) return
   const statusResult = await sub.exec([
     'tailscale',

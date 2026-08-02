@@ -91,8 +91,12 @@ export const addServe = sdk.Action.withInput(
 
   // execution
   async ({ effects, input }) => {
-    const { packageId: rawPkgId, interfaceId, hostId, internalPort } =
-      input.urlPluginMetadata
+    const {
+      packageId: rawPkgId,
+      interfaceId,
+      hostId,
+      internalPort,
+    } = input.urlPluginMetadata
     const packageId = normalizePackageId(rawPkgId)
     const mode: 'serve' | 'funnel' = input.mode ?? 'serve'
 
@@ -168,12 +172,16 @@ export const addServe = sdk.Action.withInput(
         if (allOtherPorts.includes(input.port)) {
           throw new Error(
             `Port ${input.port} is already in use by another serve entry. ` +
-            `Remove the existing entry first or choose a different Funnel port ` +
-            `(${FUNNEL_ALLOWED_PORTS.join(', ')}).`,
+              `Remove the existing entry first or choose a different Funnel port ` +
+              `(${FUNNEL_ALLOWED_PORTS.join(', ')}).`,
           )
         }
         port = input.port
-      } else if (existing !== undefined && existing.mode === 'funnel' && existing.hostId !== '') {
+      } else if (
+        existing !== undefined &&
+        existing.mode === 'funnel' &&
+        existing.hostId !== ''
+      ) {
         // Preserve the stored funnel port for fully-configured existing entries.
         port = existing.port
       } else {
@@ -194,11 +202,15 @@ export const addServe = sdk.Action.withInput(
           const blocked = [...BLOCKED_PORTS].join(', ')
           throw new Error(
             `Port ${input.port} is reserved or already in use. ` +
-            `Blocked ports: ${blocked}. Choose a different port or leave blank to auto-assign.`,
+              `Blocked ports: ${blocked}. Choose a different port or leave blank to auto-assign.`,
           )
         }
         port = input.port
-      } else if (existing !== undefined && existing.hostId !== '' && existing.mode !== 'funnel') {
+      } else if (
+        existing !== undefined &&
+        existing.hostId !== '' &&
+        existing.mode !== 'funnel'
+      ) {
         // Preserve the stored port for fully-configured existing serve entries.
         port = existing.port
       } else {
@@ -208,7 +220,7 @@ export const addServe = sdk.Action.withInput(
 
     console.info(
       `[addServe] ${packageId}/${interfaceId} resolved → mode=${mode}, scheme=${scheme}, ` +
-      `internalPort=${resolvedInternalPort}, port=${port}`,
+        `internalPort=${resolvedInternalPort}, port=${port}`,
     )
 
     const entry = {
@@ -283,8 +295,7 @@ export const addServe = sdk.Action.withInput(
       return {
         version: '1' as const,
         title: 'Funnel Added',
-        message:
-          `This service is now publicly accessible on the internet via Tailscale Funnel on port ${port}.`,
+        message: `This service is now publicly accessible on the internet via Tailscale Funnel on port ${port}.`,
         result: null,
       }
     }
