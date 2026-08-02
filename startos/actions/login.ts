@@ -64,6 +64,7 @@ export const getStarted = sdk.Action.withInput(
       hostnameSet: false,
       serves: {},
       authKey: null,
+      controlServer: null,
     }
     await writeStoreJson({ ...storeData, authKey })
     console.info('[get-started] Auth key saved to store.json for next container start.')

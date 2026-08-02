@@ -74,6 +74,7 @@ export const setMachineName = sdk.Action.withInput(
       hostnameSet: false,
       serves: {},
       authKey: null,
+      controlServer: null,
     }
 
     await writeStoreJson({

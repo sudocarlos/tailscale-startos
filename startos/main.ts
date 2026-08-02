@@ -32,6 +32,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     hostnameSet: false,
     serves: {},
     authKey: null,
+    controlServer: null,
   }
   const pendingAuthKey = initialStore.authKey ?? null
   if (pendingAuthKey) {
@@ -218,6 +219,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             hostnameSet: false,
             serves: {},
             authKey: null,
+            controlServer: null,
           }
           const serves = storeData.serves
           if (Object.keys(serves).length > 0) {
@@ -240,6 +242,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             hostnameSet: false,
             serves: {},
             authKey: null,
+            controlServer: null,
           }
 
           const name = storeData.machineName ?? 'startos'

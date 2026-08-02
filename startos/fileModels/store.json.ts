@@ -98,6 +98,13 @@ export const servesShape = z.record(
  *   socket is ready, then cleared from the store once consumed so it is not
  *   reused across later restarts.
  *
+ * `controlServer` — a custom control server URL (e.g. a self-hosted Headscale
+ *   instance) set via the Control Server action.  Passed as
+ *   `--login-server=<url>` on every `tailscale up`; null means Tailscale's
+ *   default control plane.  Also drives serve behavior: when set, proxy
+ *   serves use `--http` instead of `--https` (a custom control server cannot
+ *   provision TLS certs) and Funnel is rejected (Tailscale-cloud-only).
+ *
  * A z.union is used to accept the legacy top-level serves format (from
  * before the store was refactored) and migrate it transparently so that
  * existing installs don't break on upgrade.
@@ -107,6 +114,7 @@ const currentShape = z.object({
   hostnameSet: z.boolean().default(false),
   serves: servesShape.default({}),
   authKey: z.string().nullable().default(null),
+  controlServer: z.string().nullable().default(null),
 })
 
 export const shape = z
@@ -119,6 +127,7 @@ export const shape = z
           hostnameSet: false,
           serves: value as z.infer<typeof servesShape>,
           authKey: null,
+          controlServer: null,
         },
   )
 

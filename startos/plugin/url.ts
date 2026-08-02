@@ -16,6 +16,7 @@ export const exportUrls = sdk.plugin.url.setupExportedUrls(
       hostnameSet: false,
       serves: {},
       authKey: null,
+      controlServer: null,
     }
     const status = await statusJson.read().const(effects)
     if (!status) return
