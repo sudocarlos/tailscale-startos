@@ -64,8 +64,8 @@ temp containers can reach the tailscaled Unix socket):
 **Key files:**
 
 - `tailscale/tailscaled.state` — node identity, keys, and tailnet membership
-- `startos/store.json` — top-level object containing `machineName` (the Tailscale hostname), `authKey` (nullable string, persisted between restarts and cleared once the node reaches `BackendState=Running`), and `serves` (maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves)
-- `startos/status.json` — cached `{ ip, dnsName }` written on each successful health check
+- `startos/store.json` — top-level object containing `machineName` (the Tailscale hostname), `authKey` (nullable string, persisted between restarts and cleared once the node reaches `BackendState=Running`), `controlServer` (nullable string, a custom control server URL such as Headscale; `null` means the default Tailscale control plane), and `serves` (maps `{ packageId: { interfaceId: { port, hostId, scheme, internalPort } } }` for all configured serves)
+- `startos/status.json` — cached `{ ip, dnsName }` rewritten whenever the connected node reports new values
 
 All state persists across restarts. The node retains its Tailscale IP address as
 long as `tailscaled.state` is intact.
@@ -78,10 +78,13 @@ long as `tailscaled.state` is intact.
 2. A critical task will appear prompting you to **Set Machine Name**. This is the
    hostname your node will advertise on your Tailscale network. The default is
    `startos`. Accept the default or enter a custom name, then complete the task.
-3. Start the service. The daemons start in sequence and the chosen machine name
-   is applied automatically via `tailscale set --hostname`.
+3. Start the service. The daemon is converged to your stored configuration via
+   `tailscale up --hostname=<name> --login-server=<server>` — the chosen machine
+   name and any configured control server are applied automatically.
 4. Open the **Web Interface** from the StartOS UI.
-5. Log in with your Tailscale account to join the node to your tailnet.
+5. Log in with your Tailscale account to join the node to your tailnet. If the
+   node is waiting for interactive login, the authentication link is also shown
+   in the **Tailscale Daemon** health message.
 6. Optionally configure subnet routes, exit node, or Tailscale SSH from the web interface.
 7. Use the **Add Serve** tile action on any installed service to expose it on your tailnet or the public internet.
 
@@ -90,6 +93,12 @@ All other setup happens interactively through the Tailscale web interface.
 
 Alternatively, use the **Login** action (see [Actions](#actions-startos-ui))
 to authenticate headlessly without a browser.
+
+> **Using Headscale?** Run the **Control Server** action and enter your Headscale
+> server's URL (for example `https://headscale.example.com`), then log in: run the
+> **Login** action with a preauth key (`headscale preauthkeys create --user <user>`)
+> to authenticate without a browser, or follow the authentication link shown in the
+> Tailscale Daemon health message / web interface.
 
 ---
 
@@ -101,7 +110,8 @@ All Tailscale configuration is managed through the **Tailscale web interface**
 | Feature             | How to configure                          |
 | ------------------- | ----------------------------------------- |
 | Login / auth        | Web UI → Sign in, or **Login** action               |
-| Machine name        | Actions panel → Set Machine Name          |
+| Machine name        | Actions panel → Machine Name              |
+| Control server      | Actions panel → Control Server            |
 | Subnet router       | Web UI → Settings → Subnet router         |
 | Exit node           | Web UI → This device → Exit node          |
 | Tailscale SSH       | Web UI → Settings → Tailscale SSH server  |
@@ -157,14 +167,34 @@ the new name.
 
 - **On install:** a critical task is automatically created, blocking startup until
   the user runs this action and confirms or changes the name.
-- **While stopped:** stores the name; the `set-hostname` startup oneshot applies
-  it via `tailscale set --hostname` when the service next starts. Serve URLs
-  update after the service starts and Tailscale confirms the new name.
-- **While running:** stores the name and attempts immediate application via a
-  shared temp subcontainer. If the daemon is reachable the rename takes effect
-  instantly without a restart; serve URLs update within one health-check cycle
-  (~10 s) once Tailscale reflects the new `Self.DNSName`.
-- Re-running this action (rename) stores the new name so the startup oneshot will reconfirm it on the next start.
+- **While stopped:** stores the name; it is applied via `tailscale up --hostname`
+  when the service next starts.
+- **While running:** stores the name and applies it immediately via
+  `tailscale up --hostname` — no restart needed. Serve URLs update as soon as
+  Tailscale reflects the new `Self.DNSName`.
+- Re-running this action (rename) stores the new name so it is re-confirmed on every start.
+
+### Control Server
+
+Visible in the Actions panel. Works whether the service is running or stopped.
+
+Sets a custom control server URL, such as a self-hosted [Headscale](https://headscale.net)
+instance. Leave empty to use the official Tailscale control plane.
+
+- **While stopped:** stores the URL; the daemon is converged via
+  `tailscale up --login-server=<url>` on next start.
+- **While running:** the node is re-authenticated against the new server live —
+  no logout, no restart. With a configured auth key this is headless; otherwise
+  the action returns an authentication link (also shown in the Tailscale Daemon
+  health message) to complete login in a browser.
+- Your machine name and serve configuration are preserved. Serves are re-applied
+  automatically once the node is logged in on the new server.
+- A stored auth key is cleared on change — it was issued for the previous
+  control server and is meaningless against the new one.
+
+> With a custom control server, proxy serves are plain `http://` (a Headscale
+> server cannot provision the TLS certificates `--https` serves require) and
+> Funnel is unavailable (Tailscale-cloud-only).
 
 ### Login
 
@@ -178,21 +208,21 @@ action.
 
 | Field    | Required | Description |
 | -------- | -------- | ----------- |
-| Auth Key | No       | A `tskey-auth-...` key generated at <https://login.tailscale.com/admin/settings/keys>. Leave blank to authenticate via the web UI instead. |
+| Auth Key | No       | A `tskey-auth-...` key generated at <https://login.tailscale.com/admin/settings/keys>. With a custom control server, a preauth key from your Headscale server (`headscale preauthkeys create`). Leave blank to authenticate interactively instead. |
 
 **What it does internally:**
 
 - The auth key is always saved to `store.json` when provided.
 - If the service is **running** and the daemon socket is reachable:
-  1. Runs `tailscale login --auth-key=<key>` immediately.
-  2. Clears `authKey` from the store once `BackendState === "Running"`.
-- If the service is **stopped** (socket unavailable):
-  1. Saves the key to `store.json`.
-  2. On next start, the ready-check detects `BackendState=NeedsLogin` and runs
-     `tailscale login --auth-key=<key>` automatically.
-  3. Clears `authKey` from the store once `BackendState === "Running"`.
-- If no auth key is provided, the action completes immediately — open the Web UI
-  to sign in interactively once the service is running.
+  1. Runs `tailscale up --hostname=<name> --login-server=<server> --auth-key=<key>`.
+  2. Polls `tailscale status --json` until the client is logged in.
+  3. Re-applies configured serves, refreshes `status.json`, and clears the
+     consumed `authKey` from the store.
+- If the service is **stopped** (socket unavailable): the key stays saved and
+  the startup ready-check runs the same `tailscale up` automatically on next start.
+- If no auth key is provided, the action still converges the daemon and returns
+  the interactive authentication link when one is pending — it is also shown in
+  the Tailscale Daemon health message and the web UI.
 
 **Key types and expiry:**
 
@@ -242,14 +272,21 @@ accessible to anyone on the public internet at `https://<machine-name>.ts.net:<p
 
 **How it works internally (Serve):**
 
-The `scheme` cached from `addressInfo` determines the `tailscale serve` target format:
+The `scheme` cached from `addressInfo` determines the `tailscale serve` target format
+(`--http` instead of `--https` when a custom control server is configured):
 
 - `scheme = 'http'` or `'ws'` — `tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>` (Tailscale terminates TLS)
 - `scheme = 'https'` or `'wss'` — `tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>`
 - `scheme = null` / TCP — `tailscale serve --bg --tcp <port> tcp://<pkg>.startos:<internalPort>`
 - `packageId = 'startos'` — `tailscale serve --bg --https <port> https+insecure://startos.startos:443`
 
+If the node is not logged in when Add Serve is clicked, the entry is saved and
+applied automatically once the client connects.
+
 #### Funnel mode (public internet)
+
+> Funnel requires the official Tailscale control plane and is rejected when a
+> custom control server (e.g. Headscale) is configured.
 
 - Only ports **443**, **8443**, and **10000** are accepted (enforced by Tailscale upstream).
 - Auto-assignment priority: 443 → 8443 → 10000 (first unused port in that order).
@@ -300,10 +337,13 @@ metadata — the existing tailnet port is preserved.
 | `tailscaled`    | Tailscale Daemon | `tailscale status --json` exits 0         |
 | `tailscale-web` | Web Interface    | TCP port 8080 is listening                |
 
-On each successful `tailscaled` health check, the node's Tailscale IP and
-MagicDNS name are written to `startos/status.json`.  Once `tailscaled` is
-healthy, the `restore-serves` oneshot runs `applyServicesConfig` to restore all
-non-legacy entries from `store.json` before `tailscale-web` starts.
+Once per start, the `tailscaled` ready-check converges the daemon to the stored
+configuration with `tailscale up --hostname=<name> --login-server=<server>`
+(plus `--auth-key` when one is pending). While interactive login is pending, the
+authentication link is shown in the health message. On every transition into
+`BackendState=Running`, configured serves are re-applied from `store.json` and
+the node's Tailscale IP and MagicDNS name are written to `startos/status.json`,
+which updates serve URLs in the Interfaces panel.
 
 ---
 
@@ -325,6 +365,10 @@ None. Tailscale is a standalone service.
    services over `https://`. Non-HTTP services use raw TCP forwarding.
 5. **Web UI requires Tailscale v1.56.0+** — the `ghcr.io/tailscale/tailscale:v1.98.9`
    image satisfies this requirement.
+6. **Headscale caveats** — with a custom control server set, serves are plain
+   `http://` (no TLS certificates) and Funnel is unavailable. Serve URLs fall
+   back to the node's Tailscale IP if your Headscale server has no MagicDNS
+   configured.
 
 ---
 
@@ -362,29 +406,33 @@ dependencies: none
 daemons:
   - id: tailscaled
     command: tailscaled --state=... --socket=... --tun=userspace-networking
-    health: tailscale status --json, BackendState=Running
-    on_ready:
-      - write ip + dnsName to startos/status.json
-  - id: restore-serves   # oneshot; runs after tailscaled, blocks tailscale-web
-    mechanism: |
-      read startos/store.json once
-      tailscale serve reset      (fatal on failure)
-      tailscale funnel reset     (non-fatal — logged as warning)
-      for each non-legacy entry (hostId != ''):
-        if mode=funnel:
-          tailscale funnel --bg --https <port> http://<pkg>.startos:<internalPort>
-        elif scheme=http/ws:
-          tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>
-        elif scheme=https/wss:
-          tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>
-        elif scheme=null/tcp:
-          tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
-        packageId=startos:       (same logic; host='startos')
-
+    health: tailscale status --json (socket responsive; AuthURL shown while NeedsLogin)
+    on_start: |
+      once per start cycle (from store.json):
+        tailscale up --hostname=<machineName> --login-server=<controlServer|''> [--auth-key=<key>]
+        (retried once with --force-reauth when the daemon demands re-authentication)
+      on every transition into BackendState=Running:
+        applyServicesConfig (below), write ip + dnsName to startos/status.json,
+        clear consumed authKey from store.json
   - id: tailscale-web
     command: tailscale web --listen=0.0.0.0:8080
     health: port 8080 listening
-    requires: [tailscaled, restore-serves]
+    requires: [tailscaled]
+applyServicesConfig: |
+  tailscale serve reset      (fatal on failure)
+  tailscale funnel reset     (non-fatal — logged as warning)
+  for each non-legacy entry (hostId != ''):
+    if mode=funnel:
+      tailscale funnel --bg --https <port> http://<pkg>.startos:<internalPort>
+      (skipped when controlServer is set — Funnel is Tailscale-cloud-only)
+    elif scheme=http/ws:
+      tailscale serve --bg --https <port> http://<pkg>.startos:<internalPort>
+    elif scheme=https/wss:
+      tailscale serve --bg --https <port> https+insecure://<pkg>.startos:<internalPort>
+    elif scheme=null/tcp:
+      tailscale serve --bg --tcp   <port> tcp://<pkg>.startos:<internalPort>
+    packageId=startos:       (same logic; host='startos')
+    (--http instead of --https when controlServer is set)
 actions:
   - id: add-serve   # exposed via URL plugin table action
     description: Assign a tailnet port and configure tailscale serve or funnel for a service interface
@@ -404,20 +452,28 @@ actions:
     input: machineName (string, required, default 'startos') — 1–63 chars, lowercase letters/numbers/hyphens only
     behavior: |
       write machineName to startos/store.json
-      if daemon running: tailscale set --hostname=<name> via shared temp container
-      if daemon stopped: startup set-hostname oneshot applies the name on next start
+      tailscale up --hostname=<name> --login-server=<controlServer|''> (applies live, any login state)
+      poll status until Running, then re-apply serves and refresh status.json
+      if daemon stopped: startup ready-check applies the name on next start
+  - id: set-control-server   # visible in the Actions panel
+    name: Control Server
+    description: Set a custom control server URL (e.g. Headscale); empty means the default Tailscale control plane
+    input: controlServer (string, optional) — http(s) URL
+    behavior: |
+      write controlServer to startos/store.json and clear any stored authKey
+      tailscale up --hostname=<name> --login-server=<url|''> (live; retried with
+        --force-reauth when the node was logged in to a different plane)
+      poll status until Running: headless with a key, otherwise return the
+        pending AuthURL for browser login; serves re-apply automatically
   - id: login   # visible in the Actions panel
     name: Login
-    description: Authenticate to Tailscale; optional auth key for headless login, or leave blank to use the web UI
-    input: authKey (string, optional) — tskey-auth-... from admin console; leave blank to sign in via web UI
+    description: Authenticate to Tailscale; optional auth key for headless login, or leave blank for interactive login
+    input: authKey (string, optional) — tskey-auth-... from admin console, or Headscale preauth key; leave blank for interactive login
     behavior: |
       always save authKey to startos/store.json when provided
-      if daemon running and socket reachable:
-        tailscale login --auth-key=<key>
-        clear authKey from store once BackendState=Running
-      if daemon stopped:
-        authKey persists in store.json until next start
-        ready-check detects BackendState=NeedsLogin and runs tailscale login --auth-key=<key>
-        clears authKey from store once BackendState=Running
-      if authKey blank: return immediately (user logs in via web UI)
+      tailscale up --hostname=<name> --login-server=<controlServer|''> [--auth-key=<key>]
+      poll status until Running, then re-apply serves, refresh status.json,
+        and clear the consumed authKey from the store
+      if authKey blank: return the pending AuthURL for browser login
+      if daemon stopped: authKey persists in store.json; startup ready-check applies it
 ```
