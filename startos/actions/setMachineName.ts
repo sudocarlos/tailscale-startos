@@ -84,46 +84,68 @@ export const setMachineName = sdk.Action.withInput(
       readonly: false,
     })
 
-    return sdk.SubContainer.withTemp(
-      effects,
-      { imageId: 'tailscale', sharedRun: true },
-      mounts,
-      'tailscale-set-hostname',
-      async (sub) => {
-        try {
-          await runTailscaleUp(sub, store)
-        } catch (e) {
-          console.error('[set-machine-name] tailscale up failed:', e)
-        }
+    try {
+      return await sdk.SubContainer.withTemp(
+        effects,
+        { imageId: 'tailscale', sharedRun: true },
+        mounts,
+        'tailscale-set-hostname',
+        async (sub) => {
+          try {
+            await runTailscaleUp(sub, store)
+          } catch (e) {
+            console.error('[set-machine-name] tailscale up failed:', e)
+          }
 
-        const { running, authUrl } = await pollUntilRunning(sub, {
-          timeoutMs: 15_000,
-        })
+          const { running, authUrl } = await pollUntilRunning(sub, {
+            timeoutMs: 15_000,
+          })
 
-        if (!running) {
+          if (!running) {
+            return {
+              version: '1' as const,
+              title: 'Machine Name Saved',
+              message: authUrl
+                ? `Name saved. Complete login in your browser to apply it: ${authUrl}`
+                : 'Name saved. It will be applied the next time the service ' +
+                  'is running and logged in.',
+              result: null,
+            }
+          }
+
+          // Refresh serves and status.json so Interfaces show URLs for the
+          // new MagicDNS name.
+          const latest = (await storeJson.read().once()) ?? store
+          await convergeAfterLogin(sub, latest)
+
           return {
             version: '1' as const,
-            title: 'Machine Name Saved',
-            message: authUrl
-              ? `Name saved. Complete login in your browser to apply it: ${authUrl}`
-              : 'Name saved. It will be applied the next time the service ' +
-                'is running and logged in.',
+            title: 'Machine Name Updated',
+            message: `This node is now "${machineName}" on your Tailscale network.`,
             result: null,
           }
-        }
-
-        // Refresh serves and status.json so Interfaces show URLs for the
-        // new MagicDNS name.
-        const latest = (await storeJson.read().once()) ?? store
-        await convergeAfterLogin(sub, latest)
-
-        return {
-          version: '1' as const,
-          title: 'Machine Name Updated',
-          message: `This node is now "${machineName}" on your Tailscale network.`,
-          result: null,
-        }
-      },
-    )
+        },
+      )
+    } catch (e) {
+      // The temp subcontainer shares the running daemon — when the service
+      // is stopped there is nothing to converge against. The store is
+      // already written; main.ts applies it on the next start.
+      const isSocketError =
+        /no such file|ENOENT|ECONNREFUSED|socket|not running|unavailable/i.test(
+          String(e),
+        )
+      if (!isSocketError) throw e
+      console.info(
+        '[set-machine-name] daemon unavailable; name saved for next start',
+      )
+      return {
+        version: '1' as const,
+        title: 'Machine Name Saved',
+        message:
+          'The Tailscale daemon is not reachable (service stopped). The ' +
+          'name is saved and will be applied on next start.',
+        result: null,
+      }
+    }
   },
 )

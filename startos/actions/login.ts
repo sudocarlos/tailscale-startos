@@ -73,71 +73,91 @@ export const getStarted = sdk.Action.withInput(
       readonly: false,
     })
 
-    return sdk.SubContainer.withTemp(
-      effects,
-      { imageId: 'tailscale', sharedRun: true },
-      mounts,
-      'tailscale-login',
-      async (sub) => {
-        try {
-          await runTailscaleUp(sub, store)
-        } catch (e) {
-          // runTailscaleUp only throws on real failures in its foreground
-          // path. A rejected key is cleared so it is not retried on every
-          // restart; transient (socket/connectivity) errors keep it — the
-          // service is stopped or mid-boot and the key applies on next start.
-          const msg = String(e)
-          const isTransient =
-            /no such file|ENOENT|ECONNREFUSED|connect|socket|timeout|timed out/i.test(
-              msg,
-            )
-          if (authKey && !isTransient) {
-            try {
-              const s = (await storeJson.read().once()) ?? store
-              await writeStoreJson({ ...s, authKey: null })
-            } catch {}
+    try {
+      return await sdk.SubContainer.withTemp(
+        effects,
+        { imageId: 'tailscale', sharedRun: true },
+        mounts,
+        'tailscale-login',
+        async (sub) => {
+          try {
+            await runTailscaleUp(sub, store)
+          } catch (e) {
+            // runTailscaleUp only throws on real failures in its foreground
+            // path. A rejected key is cleared so it is not retried on every
+            // restart; transient (socket/connectivity) errors keep it — the
+            // service is stopped or mid-boot and the key applies on next start.
+            const msg = String(e)
+            const isTransient =
+              /no such file|ENOENT|ECONNREFUSED|connect|socket|timeout|timed out/i.test(
+                msg,
+              )
+            if (authKey && !isTransient) {
+              try {
+                const s = (await storeJson.read().once()) ?? store
+                await writeStoreJson({ ...s, authKey: null })
+              } catch {}
+            }
+            if (isTransient) {
+              console.info(
+                '[login] daemon unavailable; config saved for next start',
+              )
+              return
+            }
+            throw e
           }
-          if (isTransient) {
-            console.info(
-              '[login] daemon unavailable; config saved for next start',
-            )
-            return
+
+          // Poll frequently until the client is logged in so an interactive
+          // login completed in the browser is observed promptly.
+          const { running, authUrl } = await pollUntilRunning(sub, {
+            onAuthUrl: (url) =>
+              console.info(`[login] authentication pending — visit: ${url}`),
+          })
+
+          if (!running) {
+            return {
+              version: '1' as const,
+              title: 'Login Pending',
+              message: authUrl
+                ? `Complete login in your browser: ${authUrl}`
+                : 'Login is not complete yet. If the service is stopped, it ' +
+                  'will be applied on next start; otherwise check the Tailscale ' +
+                  'Daemon health message for the authentication link.',
+              result: null,
+            }
           }
-          throw e
-        }
 
-        // Poll frequently until the client is logged in so an interactive
-        // login completed in the browser is observed promptly.
-        const { running, authUrl } = await pollUntilRunning(sub, {
-          onAuthUrl: (url) =>
-            console.info(`[login] authentication pending — visit: ${url}`),
-        })
+          // Re-apply serves and refresh status.json (serve URLs in Interfaces).
+          // convergeAfterLogin also clears the consumed key from the store.
+          const latest = (await storeJson.read().once()) ?? store
+          await convergeAfterLogin(sub, latest)
 
-        if (!running) {
           return {
             version: '1' as const,
-            title: 'Login Pending',
-            message: authUrl
-              ? `Complete login in your browser: ${authUrl}`
-              : 'Login is not complete yet. If the service is stopped, it ' +
-                'will be applied on next start; otherwise check the Tailscale ' +
-                'Daemon health message for the authentication link.',
+            title: 'Logged In',
+            message: 'Tailscale is connected and your serves were re-applied.',
             result: null,
           }
-        }
-
-        // Re-apply serves and refresh status.json (serve URLs in Interfaces).
-        // convergeAfterLogin also clears the consumed key from the store.
-        const latest = (await storeJson.read().once()) ?? store
-        await convergeAfterLogin(sub, latest)
-
-        return {
-          version: '1' as const,
-          title: 'Logged In',
-          message: 'Tailscale is connected and your serves were re-applied.',
-          result: null,
-        }
-      },
-    )
+        },
+      )
+    } catch (e) {
+      // The temp subcontainer shares the running daemon — when the service
+      // is stopped there is nothing to converge against. The store is
+      // already written; main.ts applies it on the next start.
+      const isSocketError =
+        /no such file|ENOENT|ECONNREFUSED|socket|not running|unavailable/i.test(
+          String(e),
+        )
+      if (!isSocketError) throw e
+      console.info('[login] daemon unavailable; config saved for next start')
+      return {
+        version: '1' as const,
+        title: authKey ? 'Auth Key Saved' : 'Login',
+        message:
+          'The Tailscale daemon is not reachable (service stopped). Your ' +
+          'configuration is saved and will be applied on next start.',
+        result: null,
+      }
+    }
   },
 )

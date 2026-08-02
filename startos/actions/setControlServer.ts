@@ -126,57 +126,79 @@ export const setControlServer = sdk.Action.withInput(
       readonly: false,
     })
 
-    return sdk.SubContainer.withTemp(
-      effects,
-      { imageId: 'tailscale', sharedRun: true },
-      mounts,
-      'tailscale-set-control-server',
-      async (sub) => {
-        // `tailscale up --login-server=<url|''>` converges the daemon live;
-        // runTailscaleUp retries with --force-reauth when the daemon demands
-        // re-authentication for the plane switch. No logout, no restart.
-        try {
-          await runTailscaleUp(sub, store)
-        } catch (e) {
-          console.error('[set-control-server] tailscale up failed:', e)
-        }
+    try {
+      return await sdk.SubContainer.withTemp(
+        effects,
+        { imageId: 'tailscale', sharedRun: true },
+        mounts,
+        'tailscale-set-control-server',
+        async (sub) => {
+          // `tailscale up --login-server=<url|''>` converges the daemon live;
+          // runTailscaleUp retries with --force-reauth when the daemon demands
+          // re-authentication for the plane switch. No logout, no restart.
+          try {
+            await runTailscaleUp(sub, store)
+          } catch (e) {
+            console.error('[set-control-server] tailscale up failed:', e)
+          }
 
-        const { running, authUrl } = await pollUntilRunning(sub, {
-          timeoutMs: 20_000,
-          onAuthUrl: (url) =>
-            console.info(
-              `[set-control-server] authentication pending — visit: ${url}`,
-            ),
-        })
+          const { running, authUrl } = await pollUntilRunning(sub, {
+            timeoutMs: 20_000,
+            onAuthUrl: (url) =>
+              console.info(
+                `[set-control-server] authentication pending — visit: ${url}`,
+              ),
+          })
 
-        const target = controlServer ?? 'the default Tailscale control plane'
-        if (!running) {
+          const target = controlServer ?? 'the default Tailscale control plane'
+          if (!running) {
+            return {
+              version: '1' as const,
+              title: 'Control Server Saved',
+              message: authUrl
+                ? `Control server set to ${target}. Complete login in your browser: ${authUrl}`
+                : `Control server set to ${target}. It will take effect the ` +
+                  'next time the service is running — watch the Tailscale ' +
+                  'Daemon health message for the login link.',
+              result: null,
+            }
+          }
+
+          // Re-apply serves against the new control plane (plain --http under
+          // a custom server) and refresh status.json for the new DNS name.
+          const latest = (await storeJson.read().once()) ?? store
+          await convergeAfterLogin(sub, latest)
+
           return {
             version: '1' as const,
-            title: 'Control Server Saved',
-            message: authUrl
-              ? `Control server set to ${target}. Complete login in your browser: ${authUrl}`
-              : `Control server set to ${target}. It will take effect the ` +
-                'next time the service is running — watch the Tailscale ' +
-                'Daemon health message for the login link.',
+            title: controlServer
+              ? 'Control Server Set'
+              : 'Control Server Cleared',
+            message: `This node is now connected to ${target} and your serves were re-applied.`,
             result: null,
           }
-        }
-
-        // Re-apply serves against the new control plane (plain --http under
-        // a custom server) and refresh status.json for the new DNS name.
-        const latest = (await storeJson.read().once()) ?? store
-        await convergeAfterLogin(sub, latest)
-
-        return {
-          version: '1' as const,
-          title: controlServer
-            ? 'Control Server Set'
-            : 'Control Server Cleared',
-          message: `This node is now connected to ${target} and your serves were re-applied.`,
-          result: null,
-        }
-      },
-    )
+        },
+      )
+    } catch (e) {
+      // The temp subcontainer shares the running daemon — when the service
+      // is stopped there is nothing to converge against. The store is
+      // already written; main.ts applies it on the next start.
+      const isSocketError =
+        /no such file|ENOENT|ECONNREFUSED|socket|not running|unavailable/i.test(
+          String(e),
+        )
+      if (!isSocketError) throw e
+      console.info(
+        '[set-control-server] daemon unavailable; control server saved for next start',
+      )
+      return {
+        version: '1' as const,
+        title: 'Control Server Saved',
+        message:
+          'The Tailscale daemon is not reachable (service stopped). The ' +
+          'control server is saved and will take effect on next start.',
+        result: null,
+      }
+    }
   },
 )
