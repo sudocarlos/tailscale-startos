@@ -1,5 +1,6 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
+import { atomicWriteFile } from './atomicWrite'
 
 /**
  * Per-interface entry stored in store.json.
@@ -84,9 +85,10 @@ export const servesShape = z.record(
  *   'startos' and is set by the user via the Set Machine Name action before
  *   the service starts for the first time.
  *
- * `hostnameSet` — true once the startup oneshot has successfully applied
- *   the machine name via `tailscale set --hostname`.  Prevents redundant
- *   re-application on every restart after the initial set.
+ * `hostnameSet` — legacy flag retained for schema compatibility with
+ *   stores written by older package versions.  The machine name is now
+ *   applied via `tailscale up --hostname` on every start and by the
+ *   Machine Name action, so no bookkeeping flag is needed.
  *
  * `serves` — the per-package/interface serve port-mapping table (the entire
  *   former top-level shape, now nested).
@@ -97,6 +99,13 @@ export const servesShape = z.record(
  *   socket is ready, then cleared from the store once consumed so it is not
  *   reused across later restarts.
  *
+ * `controlServer` — a custom control server URL (e.g. a self-hosted Headscale
+ *   instance) set via the Control Server action.  Passed as
+ *   `--login-server=<url>` on every `tailscale up`; null means Tailscale's
+ *   default control plane.  Also drives serve behavior: when set, proxy
+ *   serves use `--http` instead of `--https` (a custom control server cannot
+ *   provision TLS certs) and Funnel is rejected (Tailscale-cloud-only).
+ *
  * A z.union is used to accept the legacy top-level serves format (from
  * before the store was refactored) and migrate it transparently so that
  * existing installs don't break on upgrade.
@@ -106,22 +115,33 @@ const currentShape = z.object({
   hostnameSet: z.boolean().default(false),
   serves: servesShape.default({}),
   authKey: z.string().nullable().default(null),
+  controlServer: z.string().nullable().default(null),
 })
 
-export const shape = z
-  .union([servesShape, currentShape])
-  .transform((value) =>
-    'serves' in value
-      ? (value as z.infer<typeof currentShape>)
-      : {
-          machineName: 'startos',
-          hostnameSet: false,
-          serves: value as z.infer<typeof servesShape>,
-          authKey: null,
-        },
-  )
+export const shape = z.union([servesShape, currentShape]).transform((value) =>
+  'serves' in value
+    ? (value as z.infer<typeof currentShape>)
+    : {
+        machineName: 'startos',
+        hostnameSet: false,
+        serves: value as z.infer<typeof servesShape>,
+        authKey: null,
+        controlServer: null,
+      },
+)
 
 export type Store = z.infer<typeof currentShape>
+
+/** Fallback when store.json does not exist yet (e.g. before first init). */
+export const defaultStore: Store = {
+  machineName: 'startos',
+  hostnameSet: false,
+  serves: {},
+  authKey: null,
+  controlServer: null,
+}
+
+const PATH = sdk.volumes.startos.subpath('/store.json')
 
 export const storeJson = FileHelper.json(
   {
@@ -130,3 +150,12 @@ export const storeJson = FileHelper.json(
   },
   shape,
 )
+
+/**
+ * Validates and atomically replaces store.json.  All writes must go through
+ * this rather than `storeJson.write` — see atomicWrite.ts for why.
+ */
+export async function writeStoreJson(data: Store): Promise<null> {
+  await atomicWriteFile(PATH, JSON.stringify(shape.parse(data), null, 2))
+  return null
+}

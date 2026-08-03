@@ -24,7 +24,7 @@ export function assertFunnelPort(port: number): void {
   if (!(FUNNEL_ALLOWED_PORTS as readonly number[]).includes(port)) {
     throw new Error(
       `Funnel only accepts ports ${FUNNEL_ALLOWED_PORTS.join(', ')}. ` +
-      `Choose one of those or switch to Tailscale Serve mode.`,
+        `Choose one of those or switch to Tailscale Serve mode.`,
     )
   }
 }
@@ -43,7 +43,7 @@ export function assignFunnelPort(store: z.infer<typeof servesShape>): number {
   }
   throw new Error(
     `All Funnel ports (${FUNNEL_ALLOWED_PORTS.join(', ')}) are already in use. ` +
-    `Remove an existing Funnel entry before adding another.`,
+      `Remove an existing Funnel entry before adding another.`,
   )
 }
 

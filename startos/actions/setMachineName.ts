@@ -1,8 +1,12 @@
 import { sdk } from '../sdk'
-import { storeJson } from '../fileModels/store.json'
+import {
+  storeJson,
+  writeStoreJson,
+  defaultStore,
+} from '../fileModels/store.json'
+import { runTailscaleUp, pollUntilLoggedIn, convergeAfterLogin } from '../up'
 
 const STATE_DIR = '/var/lib/tailscale'
-const SOCKET = '/var/run/tailscale/tailscaled.sock'
 
 const { InputSpec, Value } = sdk
 
@@ -67,58 +71,82 @@ export const setMachineName = sdk.Action.withInput(
       throw new Error('Machine name cannot be empty.')
     }
 
-    // Persist the chosen name — the set-hostname startup oneshot always
-    // re-applies it on every restart, so no hostnameSet flag is needed.
-    const storeData = (await storeJson.read().once()) ?? {
-      machineName: 'startos',
-      hostnameSet: false,
-      serves: {},
-      authKey: null,
-    }
+    // Persist the chosen name — it is passed as `tailscale up --hostname`
+    // on every start, and applied live below when the daemon is reachable.
+    const storeData = (await storeJson.read().once()) ?? defaultStore
+    const store = { ...storeData, machineName }
+    await writeStoreJson(store)
 
-    await storeJson.write(effects, {
-      ...storeData,
-      machineName,
+    const mounts = sdk.Mounts.of().mountVolume({
+      volumeId: 'tailscale',
+      subpath: null,
+      mountpoint: STATE_DIR,
+      readonly: false,
     })
 
-    // If the service is currently running, apply the rename immediately via a
-    // shared temp subcontainer so the change takes effect without a restart.
     try {
-      const mounts = sdk.Mounts.of().mountVolume({
-        volumeId: 'tailscale',
-        subpath: null,
-        mountpoint: STATE_DIR,
-        readonly: false,
-      })
-
-      await sdk.SubContainer.withTemp(
+      return await sdk.SubContainer.withTemp(
         effects,
         { imageId: 'tailscale', sharedRun: true },
         mounts,
         'tailscale-set-hostname',
         async (sub) => {
-          const r = await sub.exec([
-            'tailscale',
-            '--socket=' + SOCKET,
-            'set',
-            '--hostname=' + machineName,
-          ])
+          try {
+            await runTailscaleUp(sub, store)
+          } catch (e) {
+            console.error('[set-machine-name] tailscale up failed:', e)
+          }
 
-          if (r.exitCode === 0) {
-            console.info(`[set-machine-name] applied immediately: ${machineName}`)
-          } else {
-            console.info(
-              `[set-machine-name] daemon not running (exit ${r.exitCode}), ` +
-              `name saved to store; will apply on next start`,
-            )
+          const { loggedIn, authUrl } = await pollUntilLoggedIn(sub, {
+            timeoutMs: 15_000,
+            stopOnAuthUrl: true,
+          })
+
+          if (!loggedIn) {
+            return {
+              version: '1' as const,
+              title: 'Machine Name Saved',
+              message: authUrl
+                ? `Name saved. Complete login in your browser to apply it: ${authUrl}`
+                : 'Name saved. It will be applied the next time the service ' +
+                  'is running and logged in.',
+              result: null,
+            }
+          }
+
+          // Refresh serves and status.json so Interfaces show URLs for the
+          // new MagicDNS name.
+          const latest = (await storeJson.read().once()) ?? store
+          await convergeAfterLogin(sub, latest)
+
+          return {
+            version: '1' as const,
+            title: 'Machine Name Updated',
+            message: `This node is now "${machineName}" on your Tailscale network.`,
+            result: null,
           }
         },
       )
     } catch (e) {
+      // The temp subcontainer shares the running daemon — when the service
+      // is stopped there is nothing to converge against. The store is
+      // already written; main.ts applies it on the next start.
+      const isSocketError =
+        /no such file|ENOENT|ECONNREFUSED|socket|not running|unavailable/i.test(
+          String(e),
+        )
+      if (!isSocketError) throw e
       console.info(
-        '[set-machine-name] could not reach running daemon, name will be applied on next start:',
-        e,
+        '[set-machine-name] daemon unavailable; name saved for next start',
       )
+      return {
+        version: '1' as const,
+        title: 'Machine Name Saved',
+        message:
+          'The Tailscale daemon is not reachable (service stopped). The ' +
+          'name is saved and will be applied on next start.',
+        result: null,
+      }
     }
   },
 )

@@ -1,5 +1,11 @@
-import { servesShape, storeJson } from '../fileModels/store.json'
+import {
+  servesShape,
+  storeJson,
+  writeStoreJson,
+  defaultStore,
+} from '../fileModels/store.json'
 import { applyServicesConfig } from '../serves'
+import { runTailscaleUp, pollUntilLoggedIn } from '../up'
 import { sdk } from '../sdk'
 import {
   assignFunnelPort,
@@ -85,19 +91,28 @@ export const addServe = sdk.Action.withInput(
 
   // execution
   async ({ effects, input }) => {
-    const { packageId: rawPkgId, interfaceId, hostId, internalPort } =
-      input.urlPluginMetadata
+    const {
+      packageId: rawPkgId,
+      interfaceId,
+      hostId,
+      internalPort,
+    } = input.urlPluginMetadata
     const packageId = normalizePackageId(rawPkgId)
     const mode: 'serve' | 'funnel' = input.mode ?? 'serve'
 
     // Use .once() to avoid "write after const" error
-    const storeData = (await storeJson.read().once()) ?? {
-      machineName: 'startos',
-      hostnameSet: false,
-      serves: {},
-      authKey: null,
-    }
+    const storeData = (await storeJson.read().once()) ?? defaultStore
     const serves: z.infer<typeof servesShape> = storeData.serves
+
+    // Funnel is a Tailscale-cloud-only feature — reject it outright when a
+    // custom control server (e.g. Headscale) is configured.
+    if (mode === 'funnel' && storeData.controlServer) {
+      throw new Error(
+        'Funnel requires the official Tailscale control plane and is unavailable ' +
+          'with a custom control server. Choose Serve mode instead, or clear the ' +
+          'Control Server setting.',
+      )
+    }
 
     const existing = serves[packageId]?.[interfaceId]
 
@@ -157,12 +172,16 @@ export const addServe = sdk.Action.withInput(
         if (allOtherPorts.includes(input.port)) {
           throw new Error(
             `Port ${input.port} is already in use by another serve entry. ` +
-            `Remove the existing entry first or choose a different Funnel port ` +
-            `(${FUNNEL_ALLOWED_PORTS.join(', ')}).`,
+              `Remove the existing entry first or choose a different Funnel port ` +
+              `(${FUNNEL_ALLOWED_PORTS.join(', ')}).`,
           )
         }
         port = input.port
-      } else if (existing !== undefined && existing.mode === 'funnel' && existing.hostId !== '') {
+      } else if (
+        existing !== undefined &&
+        existing.mode === 'funnel' &&
+        existing.hostId !== ''
+      ) {
         // Preserve the stored funnel port for fully-configured existing entries.
         port = existing.port
       } else {
@@ -183,11 +202,15 @@ export const addServe = sdk.Action.withInput(
           const blocked = [...BLOCKED_PORTS].join(', ')
           throw new Error(
             `Port ${input.port} is reserved or already in use. ` +
-            `Blocked ports: ${blocked}. Choose a different port or leave blank to auto-assign.`,
+              `Blocked ports: ${blocked}. Choose a different port or leave blank to auto-assign.`,
           )
         }
         port = input.port
-      } else if (existing !== undefined && existing.hostId !== '' && existing.mode !== 'funnel') {
+      } else if (
+        existing !== undefined &&
+        existing.hostId !== '' &&
+        existing.mode !== 'funnel'
+      ) {
         // Preserve the stored port for fully-configured existing serve entries.
         port = existing.port
       } else {
@@ -197,7 +220,7 @@ export const addServe = sdk.Action.withInput(
 
     console.info(
       `[addServe] ${packageId}/${interfaceId} resolved → mode=${mode}, scheme=${scheme}, ` +
-      `internalPort=${resolvedInternalPort}, port=${port}`,
+        `internalPort=${resolvedInternalPort}, port=${port}`,
     )
 
     const entry = {
@@ -220,17 +243,52 @@ export const addServe = sdk.Action.withInput(
       readonly: false,
     })
 
+    let applied = true
     await sdk.SubContainer.withTemp(
       effects,
       { imageId: 'tailscale', sharedRun: true },
       mounts,
       'tailscale-serve-add',
       async (sub) => {
-        await applyServicesConfig(sub, updatedServes)
+        // Converge the daemon first so a pending login is driven forward;
+        // serves can only be applied once the client is logged in.
+        try {
+          await runTailscaleUp(sub, storeData)
+        } catch (e) {
+          console.error('[addServe] tailscale up failed:', e)
+        }
+        const { loggedIn } = await pollUntilLoggedIn(sub, {
+          timeoutMs: 10_000,
+          stopOnAuthUrl: true,
+        })
+        if (!loggedIn) {
+          applied = false
+          return
+        }
+        await applyServicesConfig(
+          sub,
+          updatedServes,
+          storeData.controlServer !== null,
+        )
       },
     )
 
-    await storeJson.write(effects, { ...storeData, serves: updatedServes })
+    // Persist after applying when connected (a failed apply keeps the old
+    // store); when not logged in the entry is saved now and applied
+    // automatically by the next post-login converge.
+    await writeStoreJson({ ...storeData, serves: updatedServes })
+
+    if (!applied) {
+      return {
+        version: '1' as const,
+        title: 'Serve Saved',
+        message:
+          'Tailscale is not logged in yet — this serve is saved and will be ' +
+          'applied automatically once the node connects. Check the Tailscale ' +
+          'Daemon health message for the login link.',
+        result: null,
+      }
+    }
 
     // ── Result message ─────────────────────────────────────────────────────
     // Layer 3 warning: shown only when the user confirmed Funnel mode.
@@ -238,8 +296,7 @@ export const addServe = sdk.Action.withInput(
       return {
         version: '1' as const,
         title: 'Funnel Added',
-        message:
-          `This service is now publicly accessible on the internet via Tailscale Funnel on port ${port}.`,
+        message: `This service is now publicly accessible on the internet via Tailscale Funnel on port ${port}.`,
         result: null,
       }
     }
