@@ -14,7 +14,7 @@ export const manifest = setupManifest({
   volumes: ['tailscale', 'startos'],
   images: {
     tailscale: {
-      source: { dockerTag: 'ghcr.io/tailscale/tailscale:v1.98.10' },
+      source: { dockerTag: 'ghcr.io/tailscale/tailscale:v1.102.2' },
       arch: ['x86_64', 'aarch64'],
     },
   },
