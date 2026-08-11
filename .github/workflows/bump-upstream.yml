@@ -174,6 +174,17 @@ jobs:
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git checkout -b "$BRANCH"
 
+      - name: Install build dependencies
+        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        run: npm ci
+
       - name: Run bump-version.sh
         if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
         run: |
@@ -233,13 +244,15 @@ jobs:
               `### Changes in this PR`,
               ``,
               `- Bump \`dockerTag\` in \`startos/manifest/index.ts\` to \`ghcr.io/tailscale/tailscale:v${version}\``,
-              `- Add \`startos/versions/v${version}.0.ts\` with placeholder release notes`,
+              `- Add \`startos/versions/v${version}.0.ts\` with release notes auto-populated from the upstream changelog`,
               `- Update \`startos/versions/index.ts\` to set \`v${version}.0\` as current and move \`v${currentVersion}.0\` to \`other\``,
               `- Update version references in \`README.md\``,
               ``,
               `> **Note:** This PR was created automatically by the \`bump-upstream.yml\` workflow.`,
-              `> Please review the changes, fill in the release notes placeholder in \`startos/versions/v${version}.0.ts\``,
-              `> with highlights from the [changelog](https://tailscale.com/changelog), and verify the build before merging.`,
+              `> The release notes in \`startos/versions/v${version}.0.ts\` were scraped automatically from the`,
+              `> [changelog](https://tailscale.com/changelog) — please review them for accuracy, then verify`,
+              `> the build before merging. If the changelog fetch failed, a placeholder remains and must be`,
+              `> filled in by hand.`,
             ].join('\n');
 
             const { data: pr } = await github.rest.pulls.create({
