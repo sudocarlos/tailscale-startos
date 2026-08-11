@@ -71,6 +71,15 @@ export const ${NEW_VAR} = VersionInfo.of({
 })
 TSEOF
 
+# ── Auto-populate release notes from upstream changelog ───────────────────────
+# Scrapes https://tailscale.com/changelog and fills the placeholder above.
+# Non-fatal: on failure the placeholder remains for manual review.
+if ! python3 "$(dirname "$0")/fetch-release-notes.py" \
+      "$CURRENT_VERSION" "$NEW_VERSION" --write-ts "$NEW_FILE"; then
+  echo "WARN: fetch-release-notes.py failed; ${NEW_FILE} keeps its placeholder." >&2
+  echo "       Fill it manually from https://tailscale.com/changelog#client" >&2
+fi
+
 # ── Update manifest: replace dockerTag ───────────────────────────────────────
 sed -i "s|ghcr.io/tailscale/tailscale:v${CURRENT_VERSION}|ghcr.io/tailscale/tailscale:v${NEW_VERSION}|g" "$MANIFEST"
 
@@ -136,15 +145,23 @@ with open(index_file, 'w') as f:
 print("Updated", index_file)
 PYEOF
 
+# ── Format generated files ───────────────────────────────────────────────────
+# Keeps the version file and index.ts prettier-clean regardless of array length
+# or string wrapping; prettier is a devDependency of this repo.
+if command -v npx >/dev/null 2>&1; then
+  npx --no-install prettier --write "$NEW_FILE" "$VERSIONS_INDEX" >/dev/null 2>&1 \
+    || echo "WARN: prettier not run (npx/prettier unavailable); verify formatting manually." >&2
+fi
+
 # ── Print checklist ───────────────────────────────────────────────────────────
 cat <<EOF
 
 Bumped to v${NEW_VERSION}.
 
 Next steps:
-  1. Edit ${NEW_FILE}  — add release notes from upstream changelog:
-       https://tailscale.com/changelog#client  (find the v${NEW_VERSION} entry)
-     Summarise all highlights since the previous pinned version, not just this one point release.
+  1. Review ${NEW_FILE}        — release notes are auto-populated from the
+       upstream changelog (https://tailscale.com/changelog#client). If the
+       fetch failed, a placeholder remains and you must fill it by hand.
   2. Edit README.md                     — update version references
   3. Run: make                          — to verify the build
   4. Commit: feat: bump tailscale to v${NEW_VERSION}
