@@ -201,6 +201,12 @@ def write_ts(path, notes):
     if n != 1:
         raise RuntimeError(f"could not locate en_US literal in {path}")
 
+    # Drop the placeholder comment that bump-version.sh leaves above en_US:
+    # now that real notes are in place.
+    new_content = re.sub(
+        r"^[ \t]*// TODO:[^\n]*\n(?=[ \t]*en_US:)", "", new_content, count=1, flags=re.M
+    )
+
     with open(path, "w", encoding="utf-8") as f:
         f.write(new_content)
 
