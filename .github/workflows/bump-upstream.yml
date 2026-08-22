@@ -160,9 +160,9 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const version = `v${{ needs.detect.outputs.stable_version }}`;
+            const version = '${{ needs.detect.outputs.stable_version }}';
             const digest = '${{ needs.detect.outputs.stable_digest }}';
-            const issueTitle = `Upstream: tailscale/tailscale:stable → ${version}`;
+            const issueTitle = `Upstream: tailscale/tailscale:stable → v${version}`;
 
             // Reuse an existing issue for this version if one is already open/closed
             const { data: existing } = await github.rest.issues.listForRepo({
@@ -174,7 +174,7 @@ jobs:
             });
             const match = existing.find(i => i.title === issueTitle);
             if (match) {
-              core.info(`Issue already exists for ${version}: #${match.number}`);
+              core.info(`Issue already exists for v${version}: #${match.number}`);
               core.setOutput('issue_number', match.number);
               return;
             }
@@ -184,19 +184,19 @@ jobs:
               ``,
               `| Field | Value |`,
               `|-------|-------|`,
-              `| Version | \`${version}\` |`,
+              `| Version | \`v${version}\` |`,
               `| GHCR tag | \`ghcr.io/tailscale/tailscale:stable\` |`,
               `| Digest | \`${digest}\` |`,
               ``,
               `### Links`,
               ``,
               `- [GHCR package](https://github.com/tailscale/tailscale/pkgs/container/tailscale)`,
-              `- [GitHub Release](https://github.com/tailscale/tailscale/releases/tag/${version})`,
+              `- [GitHub Release](https://github.com/tailscale/tailscale/releases/tag/v${version})`,
               `- [Changelog](https://tailscale.com/changelog)`,
               ``,
               `### Action required`,
               ``,
-              `Update the package version in this repository to \`${version}\` and rebuild the \`.s9pk\`.`,
+              `Update the package version in this repository to \`v${version}\` and rebuild the \`.s9pk\`.`,
             ].join('\n');
 
             const { data: issue } = await github.rest.issues.create({
