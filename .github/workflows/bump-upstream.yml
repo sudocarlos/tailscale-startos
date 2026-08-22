@@ -6,14 +6,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  bump:
-    name: Create version bump PR
+  detect:
+    name: Detect new stable version
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
-      issues: read
-
+      contents: read
+    outputs:
+      skip: ${{ steps.detect.outputs.skip }}
+      stable_version: ${{ steps.detect.outputs.stable_version }}
+      current_version: ${{ steps.detect.outputs.current_version }}
+      stable_digest: ${{ steps.detect.outputs.stable_digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -143,13 +145,88 @@ jobs:
             core.setOutput('current_version', currentVersion);
             core.setOutput('stable_digest', stableDigest);
 
-      - name: Check for existing bump PR
-        id: check_pr
-        if: steps.detect.outputs.skip != 'true'
+  track:
+    name: Open upstream tracking issue
+    needs: detect
+    if: needs.detect.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      issue_number: ${{ steps.track.outputs.issue_number }}
+    steps:
+      - name: Ensure tracking issue exists
+        id: track
         uses: actions/github-script@v7
         with:
           script: |
-            const version = '${{ steps.detect.outputs.stable_version }}';
+            const version = `v${{ needs.detect.outputs.stable_version }}`;
+            const digest = '${{ needs.detect.outputs.stable_digest }}';
+            const issueTitle = `Upstream: tailscale/tailscale:stable → ${version}`;
+
+            // Reuse an existing issue for this version if one is already open/closed
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              labels: 'upstream',
+              per_page: 100,
+            });
+            const match = existing.find(i => i.title === issueTitle);
+            if (match) {
+              core.info(`Issue already exists for ${version}: #${match.number}`);
+              core.setOutput('issue_number', match.number);
+              return;
+            }
+
+            const body = [
+              `A new stable release of **tailscale/tailscale** has been published.`,
+              ``,
+              `| Field | Value |`,
+              `|-------|-------|`,
+              `| Version | \`${version}\` |`,
+              `| GHCR tag | \`ghcr.io/tailscale/tailscale:stable\` |`,
+              `| Digest | \`${digest}\` |`,
+              ``,
+              `### Links`,
+              ``,
+              `- [GHCR package](https://github.com/tailscale/tailscale/pkgs/container/tailscale)`,
+              `- [GitHub Release](https://github.com/tailscale/tailscale/releases/tag/${version})`,
+              `- [Changelog](https://tailscale.com/changelog)`,
+              ``,
+              `### Action required`,
+              ``,
+              `Update the package version in this repository to \`${version}\` and rebuild the \`.s9pk\`.`,
+            ].join('\n');
+
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: issueTitle,
+              body,
+              labels: ['upstream'],
+            });
+            core.info(`Created issue #${issue.number}: ${issue.html_url}`);
+            core.setOutput('issue_number', issue.number);
+
+  bump:
+    name: Create version bump PR
+    needs: [detect, track]
+    if: needs.detect.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for existing bump PR
+        id: check_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ needs.detect.outputs.stable_version }}';
             const { data: prs } = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -164,9 +241,9 @@ jobs:
             }
 
       - name: Configure git and create branch
-        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        if: steps.check_pr.outputs.skip != 'true'
         run: |
-          BRANCH="feat/bump-tailscale-v${{ steps.detect.outputs.stable_version }}"
+          BRANCH="feat/bump-tailscale-v${{ needs.detect.outputs.stable_version }}"
           # Remove stale local/remote branch references if they exist
           git branch -D "$BRANCH" 2>/dev/null || true
           git push origin --delete "$BRANCH" 2>/dev/null || true
@@ -175,26 +252,26 @@ jobs:
           git checkout -b "$BRANCH"
 
       - name: Install build dependencies
-        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        if: steps.check_pr.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: 'npm'
 
       - name: Install npm dependencies
-        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        if: steps.check_pr.outputs.skip != 'true'
         run: npm ci
 
       - name: Run bump-version.sh
-        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        if: steps.check_pr.outputs.skip != 'true'
         run: |
-          bash scripts/bump-version.sh "${{ steps.detect.outputs.stable_version }}"
+          bash scripts/bump-version.sh "${{ needs.detect.outputs.stable_version }}"
 
       - name: Update version references in README.md
-        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        if: steps.check_pr.outputs.skip != 'true'
         env:
-          OLD_VER: ${{ steps.detect.outputs.current_version }}
-          NEW_VER: ${{ steps.detect.outputs.stable_version }}
+          OLD_VER: ${{ needs.detect.outputs.current_version }}
+          NEW_VER: ${{ needs.detect.outputs.stable_version }}
         run: |
           python3 <<'PYEOF'
           import os
@@ -210,20 +287,21 @@ jobs:
           PYEOF
 
       - name: Commit and push
-        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        if: steps.check_pr.outputs.skip != 'true'
         run: |
           git add -A
-          git commit -m "feat: bump Tailscale to v${{ steps.detect.outputs.stable_version }}"
-          git push origin "feat/bump-tailscale-v${{ steps.detect.outputs.stable_version }}"
+          git commit -m "feat: bump Tailscale to v${{ needs.detect.outputs.stable_version }}"
+          git push origin "feat/bump-tailscale-v${{ needs.detect.outputs.stable_version }}"
 
       - name: Create Pull Request
-        if: steps.detect.outputs.skip != 'true' && steps.check_pr.outputs.skip != 'true'
+        if: steps.check_pr.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const version = '${{ steps.detect.outputs.stable_version }}';
-            const currentVersion = '${{ steps.detect.outputs.current_version }}';
-            const digest = '${{ steps.detect.outputs.stable_digest }}';
+            const version = '${{ needs.detect.outputs.stable_version }}';
+            const currentVersion = '${{ needs.detect.outputs.current_version }}';
+            const digest = '${{ needs.detect.outputs.stable_digest }}';
+            const issueNumber = '${{ needs.track.outputs.issue_number }}';
 
             const body = [
               `A new stable release of **tailscale/tailscale** has been published on GHCR.`,
@@ -253,6 +331,8 @@ jobs:
               `> [changelog](https://tailscale.com/changelog) — please review them for accuracy, then verify`,
               `> the build before merging. If the changelog fetch failed, a placeholder remains and must be`,
               `> filled in by hand.`,
+              ``,
+              `Closes #${issueNumber}`,
             ].join('\n');
 
             const { data: pr } = await github.rest.pulls.create({
