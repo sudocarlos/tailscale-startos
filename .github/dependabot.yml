@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # brace-expansion and js-yaml are only present as transitive deps of the
+      # eslint/typescript-eslint bundle shipped inside @start9labs/start-sdk
+      # (bundleDependencies). npm never applies root overrides to bundled
+      # dependencies, so Dependabot updates for them cannot succeed and the
+      # code is never executed by this repo's build. See CONTRIBUTING.md.
+      - dependency-name: brace-expansion
+      - dependency-name: js-yaml
