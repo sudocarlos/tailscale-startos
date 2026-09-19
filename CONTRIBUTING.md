@@ -86,6 +86,24 @@ npm run check
 npm run prettier
 ```
 
+## npm Dependencies & Audit Advisories
+
+`@start9labs/start-sdk` ships `eslint`, `typescript-eslint`, and
+`@start9labs/start-core` as `bundleDependencies`. npm deliberately never applies
+root `overrides` to bundled dependencies, so advisories inside that subtree
+(e.g. `brace-expansion`, `js-yaml` transitives of the bundled eslint) cannot be
+resolved locally — overrides and `npm audit fix` are silently ignored there.
+
+These packages are unused by this repo's build (`npm run check` runs `tsc`, the
+build runs `ncc`; neither executes start-sdk's bundled eslint), so there is no
+runtime exposure. Treat the resulting Dependabot alerts as noise until an
+upstream start-sdk release bumps its bundled eslint. Do not hand-patch
+`package-lock.json` to silence them — the next `npm install` reverts it.
+
+Direct devDependencies (`@vercel/ncc`, `@types/node`, `prettier`, `typescript`)
+are updated normally: run `npm outdated`, bump, and keep `@types/node` aligned
+with CI's `node-version`.
+
 ## Sideload for Testing
 
 1. Build the package: `make x86` (or `make arm` for ARM hardware)
