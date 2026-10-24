@@ -2,9 +2,5 @@
   "name": "tailscale-startos",
   "dependencies": {
     "@start9labs/start-sdk": "^3.1.0"
-  },
-  "overrides": {
-    "brace-expansion": ">=1.1.21",
-    "js-yaml": ">=4.3.2"
   }
 }
