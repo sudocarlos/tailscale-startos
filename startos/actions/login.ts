@@ -121,11 +121,20 @@ export const getStarted = sdk.Action.withInput(
               version: '1' as const,
               title: 'Login Pending',
               message: authUrl
-                ? `Complete login in your browser: ${authUrl}`
+                ? 'Complete login in your browser — open or scan the link below.'
                 : 'Login is not complete yet. If the service is stopped, it ' +
                   'will be applied on next start; otherwise check the Tailscale ' +
                   'Daemon health message for the authentication link.',
-              result: null,
+              result: authUrl
+                ? {
+                    type: 'single' as const,
+                    value: authUrl,
+                    copyable: true,
+                    qr: true,
+                    masked: false,
+                    launchable: true,
+                  }
+                : null,
             }
           }
 

@@ -2,7 +2,7 @@ import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
 import { atomicWriteFile } from './atomicWrite'
 
-export const statusShape = z.object({
+export const statusShape = z.looseObject({
   ip: z.string(),
   dnsName: z.string(),
 })

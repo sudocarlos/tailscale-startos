@@ -45,10 +45,10 @@ tailscale-startos/
 ├── assets/                   # Static assets bundled into the .s9pk
 ├── icon.png                  # Package icon
 ├── LICENSE
-├── Makefile                  # ARCHES override; imports s9pk.mk
-├── s9pk.mk                   # Build rules (plumbing — do not edit)
-├── package.json
-└── tsconfig.json
+├── Makefile                  # ARCHES override; imports the SDK's s9pk.mk
+├── package.json              # declares @start9labs/start-sdk (toolchain ships with it)
+├── .prettierrc               # extends the SDK's shared prettier config
+└── tsconfig.json             # extends the SDK's tsconfig.base.json
 ```
 
 ## Build
@@ -67,8 +67,14 @@ make arm
 make
 ```
 
-The build compiles `startos/index.ts` with `ncc` into `javascript/index.js`,
-then packs it into a `.s9pk` with `start-cli s9pk pack`.
+The build runs `s9pk.mk` from the SDK: it type-checks (`tsc --noEmit`),
+lints (the SDK's shared eslint config), formats, bundles
+`startos/index.ts` with `ncc` into `javascript/index.js`, and packs it
+into a `.s9pk` with `start-cli s9pk pack`.
+
+TypeScript, Prettier, ESLint, and `ncc` are supplied by
+`@start9labs/start-sdk` — this package declares no devDependencies of
+its own.
 
 > **Important:** Never add `console.log` at module level in TypeScript source
 > files. The build reads stdout during packing to extract the manifest JSON;
@@ -77,32 +83,27 @@ then packs it into a `.s9pk` with `start-cli s9pk pack`.
 ## Type-Check Without Building
 
 ```bash
-npm run check
+npx tsc --noEmit
 ```
 
 ## Format
 
 ```bash
-npm run prettier
+make format
 ```
 
 ## npm Dependencies & Audit Advisories
 
-`@start9labs/start-sdk` ships `eslint`, `typescript-eslint`, and
-`@start9labs/start-core` as `bundleDependencies`. npm deliberately never applies
-root `overrides` to bundled dependencies, so advisories inside that subtree
-(e.g. `brace-expansion`, `js-yaml` transitives of the bundled eslint) cannot be
-resolved locally — overrides and `npm audit fix` are silently ignored there.
+The package declares a single dependency: `@start9labs/start-sdk`, which
+supplies the whole toolchain. The SDK bundles only
+`@start9labs/start-core` (as a `file:` dependency); everything else in its
+tree installs normally, so a security advisory there can be cleared with a
+root `overrides` entry in `package.json` rather than waiting for an SDK
+release. Advisories inside the bundled `start-core` subtree cannot be
+overridden — treat those as noise until an upstream fix.
 
-These packages are unused by this repo's build (`npm run check` runs `tsc`, the
-build runs `ncc`; neither executes start-sdk's bundled eslint), so there is no
-runtime exposure. Treat the resulting Dependabot alerts as noise until an
-upstream start-sdk release bumps its bundled eslint. Do not hand-patch
-`package-lock.json` to silence them — the next `npm install` reverts it.
-
-Direct devDependencies (`@vercel/ncc`, `@types/node`, `prettier`, `typescript`)
-are updated normally: run `npm outdated`, bump, and keep `@types/node` aligned
-with CI's `node-version`.
+Toolchain versions (TypeScript, Prettier, ESLint, `ncc`) track the SDK
+release; don't pin them locally.
 
 ## Sideload for Testing
 

@@ -1,5 +1,3 @@
-import { sdk } from './sdk'
+import { Dependencies } from '@start9labs/start-sdk'
 
-export const setDependencies = sdk.setupDependencies(
-  async ({ effects }) => ({}),
-)
+export const dependencies = Dependencies.of()

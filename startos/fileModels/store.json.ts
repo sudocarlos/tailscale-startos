@@ -11,7 +11,7 @@ import { atomicWriteFile } from './atomicWrite'
  * during URL export and serve restoration until the user re-clicks "Add Serve"
  * to supply the full metadata.
  */
-export const storeEntry = z.object({
+export const storeEntry = z.looseObject({
   /** Assigned tailnet HTTPS port for this serve. */
   port: z.number().int().min(1).max(65535),
   /**
@@ -110,7 +110,7 @@ export const servesShape = z.record(
  * before the store was refactored) and migrate it transparently so that
  * existing installs don't break on upgrade.
  */
-const currentShape = z.object({
+const currentShape = z.looseObject({
   machineName: z.string().default('startos'),
   hostnameSet: z.boolean().default(false),
   serves: servesShape.default({}),

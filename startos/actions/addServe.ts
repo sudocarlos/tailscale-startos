@@ -4,6 +4,7 @@ import {
   writeStoreJson,
   defaultStore,
 } from '../fileModels/store.json'
+import { statusJson } from '../fileModels/status.json'
 import { applyServicesConfig } from '../serves'
 import { runTailscaleUp, pollUntilLoggedIn } from '../up'
 import { sdk } from '../sdk'
@@ -292,13 +293,53 @@ export const addServe = sdk.Action.withInput(
 
     // ── Result message ─────────────────────────────────────────────────────
     // Layer 3 warning: shown only when the user confirmed Funnel mode.
+    // The serve URL mirrors the URL plugin's display (scheme/TLS flags come
+    // from the entry scheme and the control server); without a cached
+    // DNS name or IP there is no link to open yet.
+    const status = await statusJson.read().once()
+    const host = status?.dnsName || status?.ip
+    const ssl =
+      storeData.controlServer === null &&
+      (scheme === 'http' ||
+        scheme === 'ws' ||
+        scheme === 'https' ||
+        scheme === 'wss')
+    const serveUrl = host ? `${ssl ? 'https' : 'http'}://${host}:${port}` : null
+
     if (mode === 'funnel') {
       return {
         version: '1' as const,
         title: 'Funnel Added',
         message: `This service is now publicly accessible on the internet via Tailscale Funnel on port ${port}.`,
-        result: null,
+        result: serveUrl
+          ? {
+              type: 'single' as const,
+              value: serveUrl,
+              copyable: true,
+              qr: false,
+              masked: false,
+              launchable: true,
+            }
+          : null,
       }
+    }
+
+    return {
+      version: '1' as const,
+      title: 'Serve Added',
+      message: serveUrl
+        ? 'The serve was applied and your service is reachable on the tailnet.'
+        : 'The serve was applied. Its URL becomes available once the node is connected.',
+      result: serveUrl
+        ? {
+            type: 'single' as const,
+            value: serveUrl,
+            copyable: true,
+            qr: false,
+            masked: false,
+            launchable: true,
+          }
+        : null,
     }
   },
 )
