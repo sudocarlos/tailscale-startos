@@ -9,7 +9,6 @@ export const manifest = setupManifest({
   upstreamRepo: 'https://github.com/tailscale/tailscale',
   marketingUrl: 'https://tailscale.com/',
   donationUrl: null,
-  docsUrls: ['https://tailscale.com/docs/'],
   description: i18n.description,
   volumes: ['tailscale', 'startos'],
   images: {
@@ -18,6 +17,5 @@ export const manifest = setupManifest({
       arch: ['x86_64', 'aarch64'],
     },
   },
-  dependencies: {},
   plugins: ['url-v0'],
 })
