@@ -80,6 +80,15 @@ its own.
 > files. The build reads stdout during packing to extract the manifest JSON;
 > any extra output will corrupt the pack step.
 
+## Pull Request CI
+
+The `Build PR` workflow runs on every PR and posts `.s9pk` artifact links as a
+comment. PRs created by `bump-upstream.yml` get their build via a
+`workflow_dispatch` chain (the `GITHUB_TOKEN` cannot fire `pull_request`
+events, but dispatch is exempt). If a PR ever shows no checks — e.g. a
+bot-created branch created before the chain existed — close and reopen it:
+the `reopened` event fires the build.
+
 ## Type-Check Without Building
 
 ```bash

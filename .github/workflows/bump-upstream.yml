@@ -217,6 +217,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
 
     steps:
       - uses: actions/checkout@v4
@@ -295,6 +296,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.check_pr.outputs.skip != 'true'
+        id: create_pr
         uses: actions/github-script@v7
         with:
           script: |
@@ -345,3 +347,17 @@ jobs:
             });
 
             core.info(`Created PR #${pr.number}: ${pr.html_url}`);
+            core.setOutput('pr_number', pr.number);
+
+      # The GITHUB_TOKEN cannot fire pull_request events (its own PR would
+      # never trigger the build), but workflow_dispatch is exempt — chain the
+      # build onto the newly created PR head here. A human close/reopen has
+      # the same effect manually.
+      - name: Trigger build for the new PR
+        if: steps.check_pr.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.create_pr.outputs.pr_number }}
+          BRANCH: feat/bump-tailscale-v${{ needs.detect.outputs.stable_version }}
+        run: |
+          gh workflow run build.yml --ref "$BRANCH" -f pr_number="$PR_NUMBER"
