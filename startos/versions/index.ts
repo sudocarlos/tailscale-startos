@@ -3,6 +3,7 @@ import { v_1_102_2_0 } from './v1.102.2.0'
 import { v_1_102_3_0 } from './v1.102.3.0'
 import { v_1_102_4_0 } from './v1.102.4.0'
 import { v_1_104_2_0 } from './v1.104.2.0'
+import { v_1_104_4_0 } from './v1.104.4.0'
 import { v_1_96_4_0 } from './v1.96.4.0'
 import { v_1_96_5_0 } from './v1.96.5.0'
 import { v_1_96_5_2 } from './v1.96.5.2'
@@ -14,7 +15,7 @@ import { v_1_98_9_0 } from './v1.98.9.0'
 import { v_1_98_9_1 } from './v1.98.9.1'
 
 export const versionGraph = VersionGraph.of({
-  current: v_1_104_2_0,
+  current: v_1_104_4_0,
   other: [
     v_1_98_9_1,
     v_1_98_9_0,
@@ -28,5 +29,6 @@ export const versionGraph = VersionGraph.of({
     v_1_102_2_0,
     v_1_102_3_0,
     v_1_102_4_0,
+    v_1_104_2_0,
   ],
 })
